@@ -1,0 +1,384 @@
+import { Router } from "express";
+import { v4 as uuidv4 } from "uuid";
+import db from "../config/database.js";
+import { authenticateToken, requireRole } from "../middleware/auth.js";
+import { executeQuery } from "../services/databaseConnector.js";
+
+const router = Router();
+
+// Public dashboards don't require authentication
+router.get("/public/:id", async (req, res) => {
+  try {
+    const dashboard = db
+      .prepare(
+        `
+      SELECT * FROM dashboards WHERE id = ? AND is_public = 1
+    `
+      )
+      .get(req.params.id);
+
+    if (!dashboard) {
+      return res.status(404).json({ error: "Dashboard not found or not public" });
+    }
+
+    const dashboardCharts = db
+      .prepare(
+        `
+      SELECT dc.*, ch.name, ch.chart_type, ch.config, ch.sql_query, ch.query_id, ch.connection_id
+      FROM dashboard_charts dc
+      JOIN charts ch ON dc.chart_id = ch.id
+      WHERE dc.dashboard_id = ?
+    `
+      )
+      .all(req.params.id);
+
+    res.json({
+      dashboard: {
+        ...dashboard,
+        layout: JSON.parse(dashboard.layout),
+        charts: dashboardCharts.map((c) => ({
+          ...c,
+          config: JSON.parse(c.config),
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Get public dashboard error:", error);
+    res.status(500).json({ error: "Failed to fetch dashboard" });
+  }
+});
+
+// All other routes require authentication
+router.use(authenticateToken);
+
+// Get all dashboards
+router.get("/", (req, res) => {
+  try {
+    const dashboards = db
+      .prepare(
+        `
+      SELECT d.*, u.name as created_by_name,
+             (SELECT COUNT(*) FROM dashboard_charts WHERE dashboard_id = d.id) as chart_count
+      FROM dashboards d
+      LEFT JOIN users u ON d.created_by = u.id
+      ORDER BY d.updated_at DESC
+    `
+      )
+      .all();
+
+    const parsedDashboards = dashboards.map((d) => ({
+      ...d,
+      layout: JSON.parse(d.layout),
+    }));
+
+    res.json({ dashboards: parsedDashboards });
+  } catch (error) {
+    console.error("Get dashboards error:", error);
+    res.status(500).json({ error: "Failed to fetch dashboards" });
+  }
+});
+
+// Get single dashboard with charts
+router.get("/:id", async (req, res) => {
+  try {
+    const dashboard = db
+      .prepare(
+        `
+      SELECT d.*, u.name as created_by_name
+      FROM dashboards d
+      LEFT JOIN users u ON d.created_by = u.id
+      WHERE d.id = ?
+    `
+      )
+      .get(req.params.id);
+
+    if (!dashboard) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    const dashboardCharts = db
+      .prepare(
+        `
+      SELECT dc.*, ch.name, ch.chart_type, ch.config, ch.sql_query, ch.query_id, ch.connection_id,
+             c.name as connection_name
+      FROM dashboard_charts dc
+      JOIN charts ch ON dc.chart_id = ch.id
+      LEFT JOIN connections c ON ch.connection_id = c.id
+      WHERE dc.dashboard_id = ?
+    `
+      )
+      .all(req.params.id);
+
+    res.json({
+      dashboard: {
+        ...dashboard,
+        layout: JSON.parse(dashboard.layout),
+        charts: dashboardCharts.map((c) => ({
+          ...c,
+          config: JSON.parse(c.config),
+        })),
+      },
+    });
+  } catch (error) {
+    console.error("Get dashboard error:", error);
+    res.status(500).json({ error: "Failed to fetch dashboard" });
+  }
+});
+
+// Create new dashboard
+router.post("/", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const { name, description, layout = [], is_public = false } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: "Dashboard name is required" });
+    }
+
+    const dashboardId = uuidv4();
+
+    db.prepare(
+      `
+      INSERT INTO dashboards (id, name, description, layout, is_public, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `
+    ).run(dashboardId, name, description || null, JSON.stringify(layout), is_public ? 1 : 0, req.user.id);
+
+    res.status(201).json({
+      dashboard: {
+        id: dashboardId,
+        name,
+        description,
+        layout,
+        is_public,
+      },
+      message: "Dashboard created successfully",
+    });
+  } catch (error) {
+    console.error("Create dashboard error:", error);
+    res.status(500).json({ error: "Failed to create dashboard" });
+  }
+});
+
+// Update dashboard
+router.put("/:id", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const { name, description, layout, is_public } = req.body;
+    const dashboardId = req.params.id;
+
+    const existing = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(dashboardId);
+    if (!existing) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    db.prepare(
+      `
+      UPDATE dashboards 
+      SET name = ?, description = ?, layout = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+    ).run(
+      name || existing.name,
+      description !== undefined ? description : existing.description,
+      layout ? JSON.stringify(layout) : existing.layout,
+      is_public !== undefined ? (is_public ? 1 : 0) : existing.is_public,
+      dashboardId
+    );
+
+    res.json({ message: "Dashboard updated successfully" });
+  } catch (error) {
+    console.error("Update dashboard error:", error);
+    res.status(500).json({ error: "Failed to update dashboard" });
+  }
+});
+
+// Delete dashboard
+router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const dashboardId = req.params.id;
+
+    const existing = db.prepare("SELECT id FROM dashboards WHERE id = ?").get(dashboardId);
+    if (!existing) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    // Dashboard charts will be deleted by cascade
+    db.prepare("DELETE FROM dashboard_charts WHERE dashboard_id = ?").run(dashboardId);
+    db.prepare("DELETE FROM dashboards WHERE id = ?").run(dashboardId);
+
+    res.json({ message: "Dashboard deleted successfully" });
+  } catch (error) {
+    console.error("Delete dashboard error:", error);
+    res.status(500).json({ error: "Failed to delete dashboard" });
+  }
+});
+
+// Add chart to dashboard
+router.post("/:id/charts", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const { chart_id, position_x = 0, position_y = 0, width = 6, height = 4 } = req.body;
+    const dashboardId = req.params.id;
+
+    const dashboard = db.prepare("SELECT id FROM dashboards WHERE id = ?").get(dashboardId);
+    if (!dashboard) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    const chart = db.prepare("SELECT id FROM charts WHERE id = ?").get(chart_id);
+    if (!chart) {
+      return res.status(404).json({ error: "Chart not found" });
+    }
+
+    const id = uuidv4();
+
+    db.prepare(
+      `
+      INSERT INTO dashboard_charts (id, dashboard_id, chart_id, position_x, position_y, width, height)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `
+    ).run(id, dashboardId, chart_id, position_x, position_y, width, height);
+
+    res.status(201).json({
+      dashboardChart: { id, dashboard_id: dashboardId, chart_id, position_x, position_y, width, height },
+      message: "Chart added to dashboard",
+    });
+  } catch (error) {
+    console.error("Add chart to dashboard error:", error);
+    res.status(500).json({ error: "Failed to add chart to dashboard" });
+  }
+});
+
+// Update chart position in dashboard
+router.put("/:id/charts/:chartId", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const { position_x, position_y, width, height } = req.body;
+    const { id: dashboardId, chartId } = req.params;
+
+    const dashboardChart = db
+      .prepare(
+        `
+      SELECT * FROM dashboard_charts WHERE dashboard_id = ? AND id = ?
+    `
+      )
+      .get(dashboardId, chartId);
+
+    if (!dashboardChart) {
+      return res.status(404).json({ error: "Chart not found in dashboard" });
+    }
+
+    db.prepare(
+      `
+      UPDATE dashboard_charts 
+      SET position_x = ?, position_y = ?, width = ?, height = ?
+      WHERE id = ?
+    `
+    ).run(
+      position_x ?? dashboardChart.position_x,
+      position_y ?? dashboardChart.position_y,
+      width ?? dashboardChart.width,
+      height ?? dashboardChart.height,
+      chartId
+    );
+
+    res.json({ message: "Chart position updated" });
+  } catch (error) {
+    console.error("Update chart position error:", error);
+    res.status(500).json({ error: "Failed to update chart position" });
+  }
+});
+
+// Remove chart from dashboard
+router.delete("/:id/charts/:chartId", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const { id: dashboardId, chartId } = req.params;
+
+    const dashboardChart = db
+      .prepare(
+        `
+      SELECT * FROM dashboard_charts WHERE dashboard_id = ? AND id = ?
+    `
+      )
+      .get(dashboardId, chartId);
+
+    if (!dashboardChart) {
+      return res.status(404).json({ error: "Chart not found in dashboard" });
+    }
+
+    db.prepare("DELETE FROM dashboard_charts WHERE id = ?").run(chartId);
+    res.json({ message: "Chart removed from dashboard" });
+  } catch (error) {
+    console.error("Remove chart from dashboard error:", error);
+    res.status(500).json({ error: "Failed to remove chart from dashboard" });
+  }
+});
+
+// Get all chart data for a dashboard
+router.get("/:id/data", async (req, res) => {
+  try {
+    const dashboard = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(req.params.id);
+
+    if (!dashboard) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    const dashboardCharts = db
+      .prepare(
+        `
+      SELECT dc.id as dashboard_chart_id, ch.*, c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type
+      FROM dashboard_charts dc
+      JOIN charts ch ON dc.chart_id = ch.id
+      JOIN connections c ON ch.connection_id = c.id
+      WHERE dc.dashboard_id = ?
+    `
+      )
+      .all(req.params.id);
+
+    const chartDataPromises = dashboardCharts.map(async (chart) => {
+      try {
+        let sqlQuery = chart.sql_query;
+
+        if (chart.query_id && !sqlQuery) {
+          const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
+          if (savedQuery) {
+            sqlQuery = savedQuery.sql_query;
+          }
+        }
+
+        if (!sqlQuery) {
+          return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No query" };
+        }
+
+        const connection = {
+          id: chart.connection_id,
+          type: chart.db_type,
+          host: chart.host,
+          port: chart.port,
+          database_name: chart.database_name,
+          username: chart.username,
+          password: chart.password,
+          ssl: chart.ssl,
+        };
+
+        const result = await executeQuery(connection, sqlQuery);
+
+        return {
+          chartId: chart.id,
+          dashboardChartId: chart.dashboard_chart_id,
+          data: result.rows,
+          fields: result.fields,
+          rowCount: result.rowCount,
+          config: JSON.parse(chart.config),
+        };
+      } catch (error) {
+        return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: error.message };
+      }
+    });
+
+    const chartData = await Promise.all(chartDataPromises);
+    res.json({ chartData });
+  } catch (error) {
+    console.error("Get dashboard data error:", error);
+    res.status(500).json({ error: "Failed to fetch dashboard data" });
+  }
+});
+
+export default router;
