@@ -8,6 +8,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import db from "../../config/database.js";
 import { executeQuery } from "../databaseConnector.js";
+import { findDashboard, findChart } from "./utils.js";
 
 const dashboardManagementDef = toolDefinition({
   name: "dashboard_management",
@@ -21,7 +22,8 @@ const dashboardManagementDef = toolDefinition({
 - remove_chart: Remove a chart from a dashboard
 - update_chart_position: Update chart position/size in dashboard
 - get_data: Get all chart data for a dashboard
-Use this when user wants to create, modify dashboards or organize charts on dashboards.`,
+Use this when user wants to create, modify dashboards or organize charts on dashboards.
+You can use either dashboard ID or dashboard name, and chart ID or chart name.`,
   inputSchema: z.object({
     action: z
       .enum(["list", "get", "create", "update", "delete", "add_chart", "remove_chart", "update_chart_position", "get_data"])
@@ -90,6 +92,11 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "dashboardId is required for get action" };
           }
 
+          const dashboardBase = findDashboard(dashboardId);
+          if (!dashboardBase) {
+            return { success: false, error: "Dashboard not found", dashboardId };
+          }
+
           const dashboard = db
             .prepare(
               `SELECT d.*, u.name as created_by_name
@@ -97,7 +104,7 @@ const dashboardManagement = dashboardManagementDef.server(
                LEFT JOIN users u ON d.created_by = u.id
                WHERE d.id = ?`
             )
-            .get(dashboardId);
+            .get(dashboardBase.id);
 
           if (!dashboard) {
             return { success: false, error: "Dashboard not found", dashboardId };
@@ -185,7 +192,7 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "data is required for update action" };
           }
 
-          const existing = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(dashboardId);
+          const existing = findDashboard(dashboardId);
           if (!existing) {
             return { success: false, error: "Dashboard not found", dashboardId };
           }
@@ -201,7 +208,7 @@ const dashboardManagement = dashboardManagementDef.server(
             description !== undefined ? description : existing.description,
             layout ? JSON.stringify(layout) : existing.layout,
             is_public !== undefined ? (is_public ? 1 : 0) : existing.is_public,
-            dashboardId
+            existing.id
           );
 
           return {
@@ -217,14 +224,14 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "dashboardId is required for delete action" };
           }
 
-          const existing = db.prepare("SELECT name FROM dashboards WHERE id = ?").get(dashboardId);
+          const existing = findDashboard(dashboardId);
           if (!existing) {
             return { success: false, error: "Dashboard not found", dashboardId };
           }
 
           // Remove chart associations and delete dashboard
-          db.prepare("DELETE FROM dashboard_charts WHERE dashboard_id = ?").run(dashboardId);
-          db.prepare("DELETE FROM dashboards WHERE id = ?").run(dashboardId);
+          db.prepare("DELETE FROM dashboard_charts WHERE dashboard_id = ?").run(existing.id);
+          db.prepare("DELETE FROM dashboards WHERE id = ?").run(existing.id);
 
           return {
             success: true,
@@ -242,12 +249,12 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "chartId is required for add_chart action" };
           }
 
-          const dashboard = db.prepare("SELECT id, name FROM dashboards WHERE id = ?").get(dashboardId);
+          const dashboard = findDashboard(dashboardId);
           if (!dashboard) {
             return { success: false, error: "Dashboard not found", dashboardId };
           }
 
-          const chart = db.prepare("SELECT id, name FROM charts WHERE id = ?").get(chartId);
+          const chart = findChart(chartId);
           if (!chart) {
             return { success: false, error: "Chart not found", chartId };
           }
@@ -255,7 +262,7 @@ const dashboardManagement = dashboardManagementDef.server(
           // Check if already added
           const existing = db
             .prepare("SELECT id FROM dashboard_charts WHERE dashboard_id = ? AND chart_id = ?")
-            .get(dashboardId, chartId);
+            .get(dashboard.id, chart.id);
           if (existing) {
             return {
               success: false,
@@ -271,7 +278,7 @@ const dashboardManagement = dashboardManagementDef.server(
           db.prepare(
             `INSERT INTO dashboard_charts (id, dashboard_id, chart_id, position_x, position_y, width, height)
              VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).run(newDashboardChartId, dashboardId, chartId, position_x, position_y, width, height);
+          ).run(newDashboardChartId, dashboard.id, chart.id, position_x, position_y, width, height);
 
           return {
             success: true,
@@ -287,22 +294,31 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "dashboardId is required for remove_chart action" };
           }
 
+          const dashboard = findDashboard(dashboardId);
+          if (!dashboard) {
+            return { success: false, error: "Dashboard not found", dashboardId };
+          }
+
           // Can use either dashboardChartId or chartId
           let whereClause = "dashboard_id = ?";
-          let params = [dashboardId];
+          let params = [dashboard.id];
 
           if (dashboardChartId) {
             whereClause += " AND id = ?";
             params.push(dashboardChartId);
           } else if (chartId) {
+            const chart = findChart(chartId);
+            if (!chart) {
+              return { success: false, error: "Chart not found", chartId };
+            }
             whereClause += " AND chart_id = ?";
-            params.push(chartId);
+            params.push(chart.id);
           } else {
             return { success: false, error: "Either dashboardChartId or chartId is required" };
           }
 
-          const existing = db.prepare(`SELECT * FROM dashboard_charts WHERE ${whereClause}`).get(...params);
-          if (!existing) {
+          const existingDC = db.prepare(`SELECT * FROM dashboard_charts WHERE ${whereClause}`).get(...params);
+          if (!existingDC) {
             return { success: false, error: "Chart not found on this dashboard" };
           }
 
@@ -312,7 +328,7 @@ const dashboardManagement = dashboardManagementDef.server(
             success: true,
             action: "remove_chart",
             message: "Chart removed from dashboard",
-            dashboardId,
+            dashboardId: dashboard.id,
           };
         }
 
@@ -324,16 +340,25 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "data with position values is required" };
           }
 
+          const dashboardForPos = findDashboard(dashboardId);
+          if (!dashboardForPos) {
+            return { success: false, error: "Dashboard not found", dashboardId };
+          }
+
           // Can use either dashboardChartId or chartId
           let whereClause = "dashboard_id = ?";
-          let params = [dashboardId];
+          let params = [dashboardForPos.id];
 
           if (dashboardChartId) {
             whereClause += " AND id = ?";
             params.push(dashboardChartId);
           } else if (chartId) {
+            const chart = findChart(chartId);
+            if (!chart) {
+              return { success: false, error: "Chart not found", chartId };
+            }
             whereClause += " AND chart_id = ?";
-            params.push(chartId);
+            params.push(chart.id);
           } else {
             return { success: false, error: "Either dashboardChartId or chartId is required" };
           }
@@ -375,7 +400,7 @@ const dashboardManagement = dashboardManagementDef.server(
             return { success: false, error: "dashboardId is required for get_data action" };
           }
 
-          const dashboard = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(dashboardId);
+          const dashboard = findDashboard(dashboardId);
           if (!dashboard) {
             return { success: false, error: "Dashboard not found", dashboardId };
           }

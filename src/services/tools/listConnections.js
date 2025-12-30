@@ -19,7 +19,9 @@ const listConnectionsDef = toolDefinition({
 });
 
 const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => {
+  console.log("[TOOL] list_connections called with filter:", filter);
   try {
+    console.log("[TOOL] Querying connections from database...");
     let query = "SELECT id, name, type, host, port, database_name, username, created_by, created_at FROM connections";
     let params = [];
 
@@ -56,7 +58,8 @@ const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => 
       };
     });
 
-    return {
+    console.log("[TOOL] Found", connectionsWithUsers.length, "connections");
+    const result = {
       success: true,
       filter: filter === "all" ? null : filter,
       totalConnections: connectionsWithUsers.length,
@@ -67,8 +70,10 @@ const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => 
         sqlite: connectionsWithUsers.filter((c) => c.type === "sqlite").length,
       },
     };
+    console.log("[TOOL] list_connections returning:", JSON.stringify(result, null, 2));
+    return result;
   } catch (error) {
-    console.error("Error listing connections:", error);
+    console.error("[TOOL] Error listing connections:", error);
     return {
       success: false,
       error: error.message || "Failed to list connections",

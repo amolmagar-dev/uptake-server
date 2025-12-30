@@ -5,46 +5,57 @@
 
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import db from "../../config/database.js";
+import { findConnection, getAvailableConnectionsList } from "./utils.js";
 
 const listTablesDef = toolDefinition({
   name: "list_tables",
-  description: "List all tables and their columns (with data types) from a database connection",
+  description:
+    "List all tables and their columns (with data types) from a database connection. You can use either connection ID or connection name.",
   inputSchema: z.object({
-    connectionId: z.string().describe("The database connection ID to list tables from"),
+    connectionId: z.string().describe("The database connection ID or name to list tables from"),
   }),
 });
 
 const listTables = listTablesDef.server(async ({ connectionId }) => {
+  console.log("[TOOL] list_tables called with connectionId:", connectionId);
   try {
-    // Get connection details
-    const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connectionId);
+    // Get connection details - supports both ID and name
+    console.log("[TOOL] Fetching connection details for:", connectionId);
+    const connection = findConnection(connectionId);
 
     if (!connection) {
+      console.warn("[TOOL] Connection not found:", connectionId);
       return {
         success: false,
         error: "Connection not found",
         connectionId,
+        availableConnections: getAvailableConnectionsList(),
       };
     }
 
+    console.log("[TOOL] Found connection:", connection.name, "Type:", connection.type);
     let tables = [];
 
     // Handle different database types
     if (connection.type === "sqlite") {
+      console.log("[TOOL] Listing SQLite tables...");
       tables = await listSqliteTables(connection);
     } else if (connection.type === "mysql") {
+      console.log("[TOOL] Listing MySQL tables...");
       tables = await listMysqlTables(connection);
     } else if (connection.type === "postgresql") {
+      console.log("[TOOL] Listing PostgreSQL tables...");
       tables = await listPostgresTables(connection);
     } else {
+      console.error("[TOOL] Unsupported database type:", connection.type);
       return {
         success: false,
         error: `Unsupported database type: ${connection.type}`,
       };
     }
 
-    return {
+    console.log("[TOOL] Found", tables.length, "tables");
+    const result = {
       success: true,
       connectionId,
       connectionName: connection.name,
@@ -53,8 +64,10 @@ const listTables = listTablesDef.server(async ({ connectionId }) => {
       tableCount: tables.length,
       tables: tables.sort((a, b) => a.name.localeCompare(b.name)),
     };
+    console.log("[TOOL] list_tables returning success with", tables.length, "tables");
+    return result;
   } catch (error) {
-    console.error("Error listing tables:", error);
+    console.error("[TOOL] Error listing tables:", error);
     return {
       success: false,
       error: error.message || "Failed to list tables",

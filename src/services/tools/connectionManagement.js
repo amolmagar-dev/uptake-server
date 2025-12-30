@@ -8,6 +8,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import db from "../../config/database.js";
 import { testConnection, closeConnection } from "../databaseConnector.js";
+import { findConnection, getAvailableConnectionsList } from "./utils.js";
 
 const connectionManagementDef = toolDefinition({
   name: "connection_management",
@@ -18,7 +19,8 @@ const connectionManagementDef = toolDefinition({
 - update: Update an existing connection
 - delete: Delete a connection
 - test: Test if a connection is working
-Use this tool whenever user wants to view, add, modify, or remove database connections.`,
+Use this tool whenever user wants to view, add, modify, or remove database connections.
+You can use either connection ID or connection name for get, update, delete, and test actions.`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "test"]).describe("The action to perform"),
     connectionId: z.string().optional().describe("Connection ID (required for get, update, delete, test)"),
@@ -87,14 +89,15 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for get action" };
           }
 
-          const connection = db
-            .prepare(
-              "SELECT id, name, type, host, port, database_name, username, ssl, created_at, updated_at FROM connections WHERE id = ?"
-            )
-            .get(connectionId);
+          const connection = findConnection(connectionId);
 
           if (!connection) {
-            return { success: false, error: "Connection not found", connectionId };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
 
           return {
@@ -195,9 +198,14 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "data is required for update action" };
           }
 
-          const existing = db.prepare("SELECT * FROM connections WHERE id = ?").get(connectionId);
+          const existing = findConnection(connectionId);
           if (!existing) {
-            return { success: false, error: "Connection not found", connectionId };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
 
           closeConnection(connectionId);
@@ -256,13 +264,18 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for delete action" };
           }
 
-          const existing = db.prepare("SELECT name FROM connections WHERE id = ?").get(connectionId);
+          const existing = findConnection(connectionId);
           if (!existing) {
-            return { success: false, error: "Connection not found", connectionId };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
 
-          closeConnection(connectionId);
-          db.prepare("DELETE FROM connections WHERE id = ?").run(connectionId);
+          closeConnection(existing.id);
+          db.prepare("DELETE FROM connections WHERE id = ?").run(existing.id);
 
           return {
             success: true,
@@ -277,9 +290,14 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for test action" };
           }
 
-          const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connectionId);
+          const connection = findConnection(connectionId);
           if (!connection) {
-            return { success: false, error: "Connection not found", connectionId };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
 
           const result = await testConnection(connection);

@@ -76,9 +76,11 @@ class AIService {
    * Run chat with accumulated text from stream
    */
   async runChat(messages) {
+    console.log("[AI SERVICE] Chat called with", messages.length, "messages");
+    console.log("[AI SERVICE] Available tools:", this.tools.length, "tools");
     this.validateMessages(messages);
     const preparedMessages = this.prepareMessages(messages);
-
+    console.log("[AI SERVICE] Messages prepared, starting chat stream...");
     const stream = chat({
       adapter: geminiText(this.model),
       messages: preparedMessages,
@@ -91,13 +93,16 @@ class AIService {
 
     for await (const chunk of stream) {
       if (chunk.type === "content" && chunk.content) {
+        console.log("[AI SERVICE] Content chunk received, length:", chunk.content.length);
         text = chunk.content; // content is cumulative, not delta
       }
       if (chunk.type === "tool-call") {
+        console.log("[AI SERVICE] Tool call detected:", chunk.toolName || chunk.name);
         toolCalls.push(chunk);
       }
     }
 
+    console.log("[AI SERVICE] Stream complete. Text length:", text.length, "Tool calls:", toolCalls.length);
     return {
       text: text || "No response.",
       model: this.model,

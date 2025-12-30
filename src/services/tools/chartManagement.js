@@ -8,6 +8,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import db from "../../config/database.js";
 import { executeQuery } from "../databaseConnector.js";
+import { findConnection, findChart, getAvailableConnectionsList } from "./utils.js";
 
 const chartManagementDef = toolDefinition({
   name: "chart_management",
@@ -19,7 +20,8 @@ const chartManagementDef = toolDefinition({
 - delete: Delete a chart
 - get_data: Execute the chart's query and return data for visualization
 Use this when user wants to create visualizations, modify charts, or view chart data.
-Chart types supported: bar, line, pie, area, scatter, donut, table, number, gauge`,
+Chart types supported: bar, line, pie, area, scatter, donut, table, number, gauge
+You can use either chart ID or chart name for get, update, delete, and get_data actions.`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "get_data"]).describe("The action to perform"),
     chartId: z.string().optional().describe("Chart ID (required for get, update, delete, get_data)"),
@@ -102,6 +104,11 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           return { success: false, error: "chartId is required for get action" };
         }
 
+        const chartBase = findChart(chartId);
+        if (!chartBase) {
+          return { success: false, error: "Chart not found", chartId };
+        }
+
         const chart = db
           .prepare(
             `SELECT ch.*, c.name as connection_name, c.type as connection_type
@@ -109,7 +116,7 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
              LEFT JOIN connections c ON ch.connection_id = c.id
              WHERE ch.id = ?`
           )
-          .get(chartId);
+          .get(chartBase.id);
 
         if (!chart) {
           return { success: false, error: "Chart not found", chartId };
@@ -158,10 +165,15 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           };
         }
 
-        // Verify connection exists
-        const connection = db.prepare("SELECT id, name FROM connections WHERE id = ?").get(connection_id);
+        // Verify connection exists - supports ID or name
+        const connection = findConnection(connection_id);
         if (!connection) {
-          return { success: false, error: "Connection not found", connectionId: connection_id };
+          return { 
+            success: false, 
+            error: "Connection not found", 
+            connectionId: connection_id,
+            availableConnections: getAvailableConnectionsList(),
+          };
         }
 
         const newChartId = uuidv4();
@@ -170,7 +182,7 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
         db.prepare(
           `INSERT INTO charts (id, name, description, chart_type, config, sql_query, connection_id)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(newChartId, name, description || null, chart_type, JSON.stringify(chartConfig), sql_query, connection_id);
+        ).run(newChartId, name, description || null, chart_type, JSON.stringify(chartConfig), sql_query, connection.id);
 
         return {
           success: true,
@@ -181,7 +193,7 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
             name,
             description,
             chartType: chart_type,
-            connectionId: connection_id,
+            connectionId: connection.id,
             connectionName: connection.name,
             sqlQuery: sql_query,
             config: chartConfig,
@@ -197,7 +209,7 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           return { success: false, error: "data is required for update action" };
         }
 
-        const existing = db.prepare("SELECT * FROM charts WHERE id = ?").get(chartId);
+        const existing = findChart(chartId);
         if (!existing) {
           return { success: false, error: "Chart not found", chartId };
         }
@@ -205,11 +217,18 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
         const { name, description, chart_type, sql_query, connection_id, config } = data;
 
         // If changing connection, verify it exists
+        let connectionToUse = existing.connection_id;
         if (connection_id) {
-          const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
+          const connection = findConnection(connection_id);
           if (!connection) {
-            return { success: false, error: "Connection not found", connectionId: connection_id };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId: connection_id,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
+          connectionToUse = connection.id;
         }
 
         const updatedConfig = config
@@ -227,8 +246,8 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           chart_type || existing.chart_type,
           updatedConfig,
           sql_query || existing.sql_query,
-          connection_id || existing.connection_id,
-          chartId
+          connectionToUse,
+          existing.id
         );
 
         return {
@@ -244,14 +263,14 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           return { success: false, error: "chartId is required for delete action" };
         }
 
-        const existing = db.prepare("SELECT name FROM charts WHERE id = ?").get(chartId);
+        const existing = findChart(chartId);
         if (!existing) {
           return { success: false, error: "Chart not found", chartId };
         }
 
         // Remove from dashboards first
-        db.prepare("DELETE FROM dashboard_charts WHERE chart_id = ?").run(chartId);
-        db.prepare("DELETE FROM charts WHERE id = ?").run(chartId);
+        db.prepare("DELETE FROM dashboard_charts WHERE chart_id = ?").run(existing.id);
+        db.prepare("DELETE FROM charts WHERE id = ?").run(existing.id);
 
         return {
           success: true,
@@ -266,7 +285,7 @@ const chartManagement = chartManagementDef.server(async ({ action, chartId, data
           return { success: false, error: "chartId is required for get_data action" };
         }
 
-        const chart = db.prepare("SELECT * FROM charts WHERE id = ?").get(chartId);
+        const chart = findChart(chartId);
         if (!chart) {
           return { success: false, error: "Chart not found", chartId };
         }

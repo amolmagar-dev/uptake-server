@@ -5,8 +5,8 @@
 
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import db from "../../config/database.js";
 import { executeQuery } from "../databaseConnector.js";
+import { findConnection, getAvailableConnectionsList } from "./utils.js";
 
 const schemaExplorerDef = toolDefinition({
   name: "schema_explorer",
@@ -17,12 +17,13 @@ const schemaExplorerDef = toolDefinition({
 - get_table_stats: Get row count and basic statistics for a table
 - search_tables: Search for tables by name pattern
 - get_relationships: Get foreign key relationships for a table (PostgreSQL/MySQL)
-Use this to understand database structure before writing queries or creating charts.`,
+Use this to understand database structure before writing queries or creating charts.
+You can use either connection ID or connection name.`,
   inputSchema: z.object({
     action: z
       .enum(["list_tables", "get_columns", "get_sample_data", "get_table_stats", "search_tables", "get_relationships"])
       .describe("The action to perform"),
-    connectionId: z.string().describe("The database connection ID"),
+    connectionId: z.string().describe("The database connection ID or name"),
     tableName: z.string().optional().describe("Table name (required for get_columns, get_sample_data, get_table_stats, get_relationships)"),
     schema: z.string().optional().describe("Schema name (default: 'public' for PostgreSQL)"),
     searchPattern: z.string().optional().describe("Search pattern for table names (for search_tables)"),
@@ -32,17 +33,21 @@ Use this to understand database structure before writing queries or creating cha
 
 const schemaExplorer = schemaExplorerDef.server(
   async ({ action, connectionId, tableName, schema = "public", searchPattern, limit = 10 }) => {
+    console.log("[TOOL] schema_explorer called with action:", action, "connection:", connectionId);
     try {
-      // Get connection details
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connectionId);
+      // Get connection details - supports both ID and name
+      const connection = findConnection(connectionId);
 
       if (!connection) {
+        console.warn("[TOOL] Connection not found:", connectionId);
         return {
           success: false,
           error: "Connection not found",
           connectionId,
+          availableConnections: getAvailableConnectionsList(),
         };
       }
+      console.log("[TOOL] Found connection:", connection.name, "Type:", connection.type);
 
       const dbType = connection.type.toLowerCase();
 

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import db from "../../config/database.js";
 import { executeQuery } from "../databaseConnector.js";
+import { findConnection, findSavedQuery, getAvailableConnectionsList } from "./utils.js";
 
 const queryManagementDef = toolDefinition({
   name: "query_management",
@@ -19,7 +20,8 @@ const queryManagementDef = toolDefinition({
 - delete: Delete a saved query
 - execute: Execute a saved query and return results
 Use this when user wants to save, modify, or reuse SQL queries.
-Saved queries can be attached to charts for visualization.`,
+Saved queries can be attached to charts for visualization.
+You can use either query ID or query name for get, update, delete, and execute actions.`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "execute"]).describe("The action to perform"),
     queryId: z.string().optional().describe("Query ID (required for get, update, delete, execute)"),
@@ -74,6 +76,11 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for get action" };
         }
 
+        const queryBase = findSavedQuery(queryId);
+        if (!queryBase) {
+          return { success: false, error: "Query not found", queryId };
+        }
+
         const query = db
           .prepare(
             `SELECT sq.*, c.name as connection_name, c.type as connection_type
@@ -81,7 +88,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
              LEFT JOIN connections c ON sq.connection_id = c.id
              WHERE sq.id = ?`
           )
-          .get(queryId);
+          .get(queryBase.id);
 
         if (!query) {
           return { success: false, error: "Query not found", queryId };
@@ -124,10 +131,15 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           };
         }
 
-        // Verify connection exists
-        const connection = db.prepare("SELECT id, name FROM connections WHERE id = ?").get(connection_id);
+        // Verify connection exists - supports ID or name
+        const connection = findConnection(connection_id);
         if (!connection) {
-          return { success: false, error: "Connection not found", connectionId: connection_id };
+          return { 
+            success: false, 
+            error: "Connection not found", 
+            connectionId: connection_id,
+            availableConnections: getAvailableConnectionsList(),
+          };
         }
 
         const newQueryId = uuidv4();
@@ -135,7 +147,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
         db.prepare(
           `INSERT INTO saved_queries (id, name, description, sql_query, connection_id)
            VALUES (?, ?, ?, ?, ?)`
-        ).run(newQueryId, name, description || null, sql_query, connection_id);
+        ).run(newQueryId, name, description || null, sql_query, connection.id);
 
         return {
           success: true,
@@ -146,7 +158,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
             name,
             description,
             sqlQuery: sql_query,
-            connectionId: connection_id,
+            connectionId: connection.id,
             connectionName: connection.name,
           },
         };
@@ -160,7 +172,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "data is required for update action" };
         }
 
-        const existing = db.prepare("SELECT * FROM saved_queries WHERE id = ?").get(queryId);
+        const existing = findSavedQuery(queryId);
         if (!existing) {
           return { success: false, error: "Query not found", queryId };
         }
@@ -168,11 +180,18 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
         const { name, description, sql_query, connection_id } = data;
 
         // If changing connection, verify it exists
+        let connectionToUse = existing.connection_id;
         if (connection_id) {
-          const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
+          const connection = findConnection(connection_id);
           if (!connection) {
-            return { success: false, error: "Connection not found", connectionId: connection_id };
+            return { 
+              success: false, 
+              error: "Connection not found", 
+              connectionId: connection_id,
+              availableConnections: getAvailableConnectionsList(),
+            };
           }
+          connectionToUse = connection.id;
         }
 
         db.prepare(
@@ -183,8 +202,8 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           name || existing.name,
           description !== undefined ? description : existing.description,
           sql_query || existing.sql_query,
-          connection_id || existing.connection_id,
-          queryId
+          connectionToUse,
+          existing.id
         );
 
         return {
@@ -200,13 +219,13 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for delete action" };
         }
 
-        const existing = db.prepare("SELECT name FROM saved_queries WHERE id = ?").get(queryId);
+        const existing = findSavedQuery(queryId);
         if (!existing) {
           return { success: false, error: "Query not found", queryId };
         }
 
         // Check if any charts use this query
-        const chartsUsingQuery = db.prepare("SELECT id, name FROM charts WHERE query_id = ?").all(queryId);
+        const chartsUsingQuery = db.prepare("SELECT id, name FROM charts WHERE query_id = ?").all(existing.id);
         if (chartsUsingQuery.length > 0) {
           return {
             success: false,
@@ -215,7 +234,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           };
         }
 
-        db.prepare("DELETE FROM saved_queries WHERE id = ?").run(queryId);
+        db.prepare("DELETE FROM saved_queries WHERE id = ?").run(existing.id);
 
         return {
           success: true,
@@ -230,12 +249,12 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for execute action" };
         }
 
-        const savedQuery = db.prepare("SELECT * FROM saved_queries WHERE id = ?").get(queryId);
+        const savedQuery = findSavedQuery(queryId);
         if (!savedQuery) {
           return { success: false, error: "Query not found", queryId };
         }
 
-        const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(savedQuery.connection_id);
+        const connection = findConnection(savedQuery.connection_id);
         if (!connection) {
           return { success: false, error: "Connection not found" };
         }
