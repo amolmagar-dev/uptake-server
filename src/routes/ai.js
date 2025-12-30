@@ -18,7 +18,6 @@ router.post("/chat", validateChatRequest, async (req, res) => {
     return res.json({
       message: result.text,
       model: result.model,
-      ...(result.toolCalls && { toolCalls: result.toolCalls }),
     });
   } catch (error) {
     console.error("AI chat error:", error);

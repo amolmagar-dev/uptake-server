@@ -37,7 +37,7 @@ class AIService {
     const stream = chat({
       adapter: geminiText(this.model),
       messages,
-      tools: this.tools,
+      tools: this.tools.length > 0 ? this.tools : undefined,
     });
 
     // Accumulate text from stream chunks
