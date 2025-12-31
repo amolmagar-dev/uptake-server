@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
 import { executeQuery } from "../services/databaseConnector.js";
+import { executeApiRequest } from "../services/apiConnector.js";
+import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
 const router = Router();
 
@@ -366,9 +368,9 @@ router.get("/:id/data", async (req, res) => {
         `
       SELECT dc.id as dashboard_chart_id, ch.*,
              d.id as d_id, d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
-             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
+             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type, c.config as db_config,
              dc_conn.host as dc_host, dc_conn.port as dc_port, dc_conn.database_name as dc_database_name, 
-             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type
+             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type, dc_conn.config as dc_db_config
       FROM dashboard_charts dc
       JOIN charts ch ON dc.chart_id = ch.id
       LEFT JOIN datasets d ON ch.dataset_id = d.id
@@ -385,9 +387,10 @@ router.get("/:id/data", async (req, res) => {
         `
       SELECT dc.id as dashboard_chart_id, cc.*,
              d.id as d_id, d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
-             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
+             d.id as d_id, d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
+             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type, c.config as db_config,
              dc_conn.host as dc_host, dc_conn.port as dc_port, dc_conn.database_name as dc_database_name, 
-             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type
+             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type, dc_conn.config as dc_db_config
       FROM dashboard_charts dc
       JOIN custom_components cc ON dc.component_id = cc.id
       LEFT JOIN datasets d ON cc.dataset_id = d.id
@@ -404,21 +407,8 @@ router.get("/:id/data", async (req, res) => {
         let sqlQuery;
         let connection;
 
-        // Check if chart uses a dataset
+          // Check if chart uses a dataset
         if (chart.dataset_id && chart.d_id) {
-          // Chart uses a dataset
-          if (chart.source_type !== 'sql') {
-            return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: `Unsupported source type: ${chart.source_type}` };
-          }
-
-          // Build query based on dataset type
-          if (chart.dataset_type === 'physical') {
-            const schemaPrefix = chart.table_schema ? `"${chart.table_schema}".` : '';
-            sqlQuery = `SELECT * FROM ${schemaPrefix}"${chart.table_name}"`;
-          } else if (chart.dataset_type === 'virtual') {
-            sqlQuery = chart.dataset_sql_query;
-          }
-
           connection = {
             id: chart.dataset_connection_id,
             type: chart.db_type,
@@ -427,7 +417,43 @@ router.get("/:id/data", async (req, res) => {
             database_name: chart.database_name,
             username: chart.username,
             password: chart.password,
+            username: chart.username,
+            password: chart.password,
             ssl: chart.ssl,
+            config: chart.db_config,
+          };
+
+          let result;
+
+          if (chart.source_type === 'sql') {
+            // Build query based on dataset type
+            if (chart.dataset_type === 'physical') {
+              const schemaPrefix = chart.table_schema ? `"${chart.table_schema}".` : '';
+              sqlQuery = `SELECT * FROM ${schemaPrefix}"${chart.table_name}"`;
+            } else if (chart.dataset_type === 'virtual') {
+              sqlQuery = chart.dataset_sql_query;
+            }
+
+            if (!sqlQuery) {
+              return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No query" };
+            }
+             
+            result = await executeQuery(connection, sqlQuery);
+          } else if (chart.source_type === 'api') {
+            result = await executeApiRequest(connection);
+          } else if (chart.source_type === 'googlesheet') {
+            result = await fetchGoogleSheet(connection);
+          } else {
+            return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: `Unsupported source type: ${chart.source_type}` };
+          }
+
+          return {
+            chartId: chart.id,
+            dashboardChartId: chart.dashboard_chart_id,
+            data: result.rows,
+            fields: result.fields,
+            rowCount: result.rowCount,
+            config: JSON.parse(chart.config),
           };
         } else {
           // Legacy: chart uses connection directly
@@ -448,19 +474,31 @@ router.get("/:id/data", async (req, res) => {
             database_name: chart.dc_database_name,
             username: chart.dc_username,
             password: chart.dc_password,
+            username: chart.dc_username,
+            password: chart.dc_password,
             ssl: chart.dc_ssl,
+            config: chart.dc_db_config,
+          };
+
+          if (!sqlQuery) {
+            return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No query" };
+          }
+  
+          if (!connection || !connection.host) {
+            return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No connection" };
+          }
+  
+          const result = await executeQuery(connection, sqlQuery);
+
+          return {
+            chartId: chart.id,
+            dashboardChartId: chart.dashboard_chart_id,
+            data: result.rows,
+            fields: result.fields,
+            rowCount: result.rowCount,
+            config: JSON.parse(chart.config),
           };
         }
-
-        if (!sqlQuery) {
-          return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No query" };
-        }
-
-        if (!connection || !connection.host) {
-          return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No connection" };
-        }
-
-        const result = await executeQuery(connection, sqlQuery);
 
         return {
           chartId: chart.id,
@@ -483,18 +521,6 @@ router.get("/:id/data", async (req, res) => {
 
         // Check if component uses a dataset
         if (component.dataset_id && component.d_id) {
-          if (component.source_type !== 'sql') {
-            return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: `Unsupported source type: ${component.source_type}` };
-          }
-
-          // Build query based on dataset type
-          if (component.dataset_type === 'physical') {
-            const schemaPrefix = component.table_schema ? `"${component.table_schema}".` : '';
-            sqlQuery = `SELECT * FROM ${schemaPrefix}"${component.table_name}"`;
-          } else if (component.dataset_type === 'virtual') {
-            sqlQuery = component.dataset_sql_query;
-          }
-
           connection = {
             id: component.dataset_connection_id,
             type: component.db_type,
@@ -503,11 +529,55 @@ router.get("/:id/data", async (req, res) => {
             database_name: component.database_name,
             username: component.username,
             password: component.password,
+            username: component.username,
+            password: component.password,
             ssl: component.ssl,
+            config: component.db_config,
           };
-        } else if (component.connection_id && component.sql_query) {
-          // Legacy: component uses connection directly
+
+          let result;
+
+          if (component.source_type === 'sql') {
+            // Build query based on dataset type
+            if (component.dataset_type === 'physical') {
+              const schemaPrefix = component.table_schema ? `"${component.table_schema}".` : '';
+              sqlQuery = `SELECT * FROM ${schemaPrefix}"${component.table_name}"`;
+            } else if (component.dataset_type === 'virtual') {
+              sqlQuery = component.dataset_sql_query;
+            }
+
+            if (!sqlQuery) {
+              return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: "No query" };
+            }
+             
+            result = await executeQuery(connection, sqlQuery);
+          } else if (component.source_type === 'api') {
+            result = await executeApiRequest(connection);
+          } else if (component.source_type === 'googlesheet') {
+            result = await fetchGoogleSheet(connection);
+          } else {
+            return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: `Unsupported source type: ${component.source_type}` };
+          }
+
+          return {
+            componentId: component.id,
+            dashboardChartId: component.dashboard_chart_id,
+            data: result.rows,
+            fields: result.fields,
+            rowCount: result.rowCount,
+            config: JSON.parse(component.config || '{}'),
+          };
+        } else {
+          // Legacy check
           sqlQuery = component.sql_query;
+
+          if (component.query_id && !sqlQuery) {
+            const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(component.query_id);
+            if (savedQuery) {
+              sqlQuery = savedQuery.sql_query;
+            }
+          }
+
           connection = {
             id: component.connection_id,
             type: component.dc_db_type,
@@ -516,20 +586,31 @@ router.get("/:id/data", async (req, res) => {
             database_name: component.dc_database_name,
             username: component.dc_username,
             password: component.dc_password,
+            username: component.dc_username,
+            password: component.dc_password,
             ssl: component.dc_ssl,
+            config: component.dc_db_config,
           };
-        }
 
-        // If no data source, return without data
-        if (!sqlQuery || !connection || !connection.host) {
-          return { 
-            componentId: component.id, 
+          if (!sqlQuery) {
+            return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: "No query" };
+          }
+  
+          if (!connection || !connection.host) {
+            return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: "No connection" };
+          }
+  
+          const result = await executeQuery(connection, sqlQuery);
+
+          return {
+            componentId: component.id,
             dashboardChartId: component.dashboard_chart_id,
-            data: null 
+            data: result.rows,
+            fields: result.fields,
+            rowCount: result.rowCount,
+            config: JSON.parse(component.config || '{}'),
           };
         }
-
-        const result = await executeQuery(connection, sqlQuery);
 
         return {
           componentId: component.id,
