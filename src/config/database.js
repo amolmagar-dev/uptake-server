@@ -61,6 +61,28 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Datasets table - abstraction layer between connections and charts
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS datasets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      source_type TEXT NOT NULL DEFAULT 'sql',
+      dataset_type TEXT NOT NULL DEFAULT 'physical',
+      connection_id TEXT,
+      table_name TEXT,
+      table_schema TEXT DEFAULT 'public',
+      sql_query TEXT,
+      source_config TEXT,
+      columns TEXT,
+      created_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (connection_id) REFERENCES connections(id),
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    )
+  `);
+
   // Charts table
   db.exec(`
     CREATE TABLE IF NOT EXISTS charts (
@@ -71,15 +93,26 @@ export async function initializeDatabase() {
       config TEXT NOT NULL,
       query_id TEXT,
       sql_query TEXT,
-      connection_id TEXT NOT NULL,
+      connection_id TEXT,
+      dataset_id TEXT,
       created_by TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (query_id) REFERENCES saved_queries(id),
       FOREIGN KEY (connection_id) REFERENCES connections(id),
+      FOREIGN KEY (dataset_id) REFERENCES datasets(id),
       FOREIGN KEY (created_by) REFERENCES users(id)
     )
   `);
+
+  // Migration: Add dataset_id column to existing charts table if not exists
+  const chartsTableInfo = db.pragma('table_info(charts)');
+  const hasDatasetId = chartsTableInfo.some(col => col.name === 'dataset_id');
+  if (!hasDatasetId) {
+    console.log('Migrating charts table to add dataset_id column...');
+    db.exec(`ALTER TABLE charts ADD COLUMN dataset_id TEXT REFERENCES datasets(id)`);
+    console.log('Charts table migration complete!');
+  }
 
   // Dashboards table
   db.exec(`

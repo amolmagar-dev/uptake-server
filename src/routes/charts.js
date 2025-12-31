@@ -14,10 +14,13 @@ router.get("/", (req, res) => {
     const charts = db
       .prepare(
         `
-      SELECT ch.*, c.name as connection_name, c.type as connection_type,
+      SELECT ch.*, 
+             c.name as connection_name, c.type as connection_type,
+             d.name as dataset_name, d.dataset_type, d.source_type,
              u.name as created_by_name
       FROM charts ch
       LEFT JOIN connections c ON ch.connection_id = c.id
+      LEFT JOIN datasets d ON ch.dataset_id = d.id
       LEFT JOIN users u ON ch.created_by = u.id
       ORDER BY ch.updated_at DESC
     `
@@ -43,9 +46,12 @@ router.get("/:id", (req, res) => {
     const chart = db
       .prepare(
         `
-      SELECT ch.*, c.name as connection_name, c.type as connection_type
+      SELECT ch.*, 
+             c.name as connection_name, c.type as connection_type,
+             d.name as dataset_name, d.dataset_type, d.source_type
       FROM charts ch
       LEFT JOIN connections c ON ch.connection_id = c.id
+      LEFT JOIN datasets d ON ch.dataset_id = d.id
       WHERE ch.id = ?
     `
       )
@@ -70,19 +76,35 @@ router.get("/:id", (req, res) => {
 // Create new chart
 router.post("/", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { name, description, chart_type, config, query_id, sql_query, connection_id } = req.body;
+    const { name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id } = req.body;
 
-    if (!name || !chart_type || !config || !connection_id) {
-      return res.status(400).json({ error: "Name, chart type, config, and connection ID are required" });
+    if (!name || !chart_type || !config) {
+      return res.status(400).json({ error: "Name, chart type, and config are required" });
     }
 
-    if (!sql_query && !query_id) {
-      return res.status(400).json({ error: "Either SQL query or query ID is required" });
+    // New charts should use dataset_id, but support legacy connection_id for backward compatibility
+    if (!dataset_id && !connection_id) {
+      return res.status(400).json({ error: "Either dataset_id or connection_id is required" });
     }
 
-    const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
-    if (!connection) {
-      return res.status(404).json({ error: "Connection not found" });
+    // If using dataset, validate it exists
+    if (dataset_id) {
+      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
+      }
+    }
+
+    // Legacy: If using connection directly (backward compatibility)
+    if (connection_id && !dataset_id) {
+      const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "Connection not found" });
+      }
+
+      if (!sql_query && !query_id) {
+        return res.status(400).json({ error: "Either SQL query or query ID is required when using connection directly" });
+      }
     }
 
     if (query_id) {
@@ -96,8 +118,8 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 
     db.prepare(
       `
-      INSERT INTO charts (id, name, description, chart_type, config, query_id, sql_query, connection_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO charts (id, name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       chartId,
@@ -105,9 +127,10 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
       description || null,
       chart_type,
       JSON.stringify(config),
+      dataset_id || null,
       query_id || null,
       sql_query || null,
-      connection_id,
+      connection_id || null,
       req.user.id
     );
 
@@ -118,6 +141,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
         description,
         chart_type,
         config,
+        dataset_id,
         query_id,
         sql_query,
         connection_id,
@@ -133,7 +157,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 // Update chart
 router.put("/:id", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { name, description, chart_type, config, query_id, sql_query, connection_id } = req.body;
+    const { name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id } = req.body;
     const chartId = req.params.id;
 
     const existing = db.prepare("SELECT * FROM charts WHERE id = ?").get(chartId);
@@ -145,7 +169,7 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       `
       UPDATE charts 
       SET name = ?, description = ?, chart_type = ?, config = ?, 
-          query_id = ?, sql_query = ?, connection_id = ?, updated_at = CURRENT_TIMESTAMP
+          dataset_id = ?, query_id = ?, sql_query = ?, connection_id = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
     ).run(
@@ -153,9 +177,10 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       description !== undefined ? description : existing.description,
       chart_type || existing.chart_type,
       config ? JSON.stringify(config) : existing.config,
+      dataset_id !== undefined ? dataset_id : existing.dataset_id,
       query_id !== undefined ? query_id : existing.query_id,
       sql_query !== undefined ? sql_query : existing.sql_query,
-      connection_id || existing.connection_id,
+      connection_id !== undefined ? connection_id : existing.connection_id,
       chartId
     );
 
@@ -197,23 +222,49 @@ router.get("/:id/data", async (req, res) => {
     }
 
     let sqlQuery = chart.sql_query;
+    let connection;
 
-    // If chart uses a saved query, get it
-    if (chart.query_id && !sqlQuery) {
-      const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
-      if (!savedQuery) {
-        return res.status(404).json({ error: "Associated query not found" });
+    // If chart uses a dataset, get query from dataset
+    if (chart.dataset_id) {
+      const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(chart.dataset_id);
+      if (!dataset) {
+        return res.status(404).json({ error: "Associated dataset not found" });
       }
-      sqlQuery = savedQuery.sql_query;
-    }
 
-    if (!sqlQuery) {
-      return res.status(400).json({ error: "No SQL query associated with this chart" });
-    }
+      if (dataset.source_type !== 'sql') {
+        return res.status(400).json({ error: `Data fetching for ${dataset.source_type} source type not supported yet` });
+      }
 
-    const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(chart.connection_id);
-    if (!connection) {
-      return res.status(404).json({ error: "Connection not found" });
+      connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "Dataset connection not found" });
+      }
+
+      // Build query based on dataset type
+      if (dataset.dataset_type === 'physical') {
+        const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+      } else if (dataset.dataset_type === 'virtual') {
+        sqlQuery = dataset.sql_query;
+      }
+    } else {
+      // Legacy: chart uses connection directly
+      if (chart.query_id && !sqlQuery) {
+        const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
+        if (!savedQuery) {
+          return res.status(404).json({ error: "Associated query not found" });
+        }
+        sqlQuery = savedQuery.sql_query;
+      }
+
+      if (!sqlQuery) {
+        return res.status(400).json({ error: "No SQL query associated with this chart" });
+      }
+
+      connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(chart.connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "Connection not found" });
+      }
     }
 
     const result = await executeQuery(connection, sqlQuery);

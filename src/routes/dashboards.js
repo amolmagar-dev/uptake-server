@@ -360,14 +360,20 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Dashboard not found" });
     }
 
-    // Get chart data
+    // Get chart data - support both dataset_id and legacy connection_id
     const dashboardCharts = db
       .prepare(
         `
-      SELECT dc.id as dashboard_chart_id, ch.*, c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type
+      SELECT dc.id as dashboard_chart_id, ch.*,
+             d.id as d_id, d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
+             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
+             dc_conn.host as dc_host, dc_conn.port as dc_port, dc_conn.database_name as dc_database_name, 
+             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type
       FROM dashboard_charts dc
       JOIN charts ch ON dc.chart_id = ch.id
-      JOIN connections c ON ch.connection_id = c.id
+      LEFT JOIN datasets d ON ch.dataset_id = d.id
+      LEFT JOIN connections c ON d.connection_id = c.id
+      LEFT JOIN connections dc_conn ON ch.connection_id = dc_conn.id
       WHERE dc.dashboard_id = ? AND dc.chart_id IS NOT NULL
     `
       )
@@ -389,29 +395,64 @@ router.get("/:id/data", async (req, res) => {
     // Process chart data
     const chartDataPromises = dashboardCharts.map(async (chart) => {
       try {
-        let sqlQuery = chart.sql_query;
+        let sqlQuery;
+        let connection;
 
-        if (chart.query_id && !sqlQuery) {
-          const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
-          if (savedQuery) {
-            sqlQuery = savedQuery.sql_query;
+        // Check if chart uses a dataset
+        if (chart.dataset_id && chart.d_id) {
+          // Chart uses a dataset
+          if (chart.source_type !== 'sql') {
+            return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: `Unsupported source type: ${chart.source_type}` };
           }
+
+          // Build query based on dataset type
+          if (chart.dataset_type === 'physical') {
+            const schemaPrefix = chart.table_schema ? `"${chart.table_schema}".` : '';
+            sqlQuery = `SELECT * FROM ${schemaPrefix}"${chart.table_name}"`;
+          } else if (chart.dataset_type === 'virtual') {
+            sqlQuery = chart.dataset_sql_query;
+          }
+
+          connection = {
+            id: chart.dataset_connection_id,
+            type: chart.db_type,
+            host: chart.host,
+            port: chart.port,
+            database_name: chart.database_name,
+            username: chart.username,
+            password: chart.password,
+            ssl: chart.ssl,
+          };
+        } else {
+          // Legacy: chart uses connection directly
+          sqlQuery = chart.sql_query;
+
+          if (chart.query_id && !sqlQuery) {
+            const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
+            if (savedQuery) {
+              sqlQuery = savedQuery.sql_query;
+            }
+          }
+
+          connection = {
+            id: chart.connection_id,
+            type: chart.dc_db_type,
+            host: chart.dc_host,
+            port: chart.dc_port,
+            database_name: chart.dc_database_name,
+            username: chart.dc_username,
+            password: chart.dc_password,
+            ssl: chart.dc_ssl,
+          };
         }
 
         if (!sqlQuery) {
           return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No query" };
         }
 
-        const connection = {
-          id: chart.connection_id,
-          type: chart.db_type,
-          host: chart.host,
-          port: chart.port,
-          database_name: chart.database_name,
-          username: chart.username,
-          password: chart.password,
-          ssl: chart.ssl,
-        };
+        if (!connection || !connection.host) {
+          return { chartId: chart.id, dashboardChartId: chart.dashboard_chart_id, error: "No connection" };
+        }
 
         const result = await executeQuery(connection, sqlQuery);
 

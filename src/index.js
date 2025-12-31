@@ -18,6 +18,7 @@ import chartRoutes from "./routes/charts.js";
 import dashboardRoutes from "./routes/dashboards.js";
 import aiRoutes from "./routes/ai.js";
 import componentRoutes from "./routes/components.js";
+import datasetRoutes from "./routes/datasets.js";
 
 // Import database initialization
 import { initializeDatabase } from "./config/database.js";
@@ -99,6 +100,7 @@ app.use("/api/charts", chartRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/components", componentRoutes);
+app.use("/api/datasets", datasetRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -130,6 +132,7 @@ app.listen(PORT, () => {
 ║   • /api/queries/*          - SQL queries                 ║
 ║   • /api/charts/*           - Chart management            ║
 ║   • /api/dashboards/*       - Dashboard management        ║
+   ║   • /api/datasets/*         - Dataset management          ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
