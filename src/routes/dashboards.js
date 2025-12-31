@@ -379,14 +379,20 @@ router.get("/:id/data", async (req, res) => {
       )
       .all(req.params.id);
 
-    // Get component data
+    // Get component data - support both dataset_id and legacy connection_id
     const dashboardComponents = db
       .prepare(
         `
-      SELECT dc.id as dashboard_chart_id, cc.*, c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type
+      SELECT dc.id as dashboard_chart_id, cc.*,
+             d.id as d_id, d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
+             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
+             dc_conn.host as dc_host, dc_conn.port as dc_port, dc_conn.database_name as dc_database_name, 
+             dc_conn.username as dc_username, dc_conn.password as dc_password, dc_conn.ssl as dc_ssl, dc_conn.type as dc_db_type
       FROM dashboard_charts dc
       JOIN custom_components cc ON dc.component_id = cc.id
-      LEFT JOIN connections c ON cc.connection_id = c.id
+      LEFT JOIN datasets d ON cc.dataset_id = d.id
+      LEFT JOIN connections c ON d.connection_id = c.id
+      LEFT JOIN connections dc_conn ON cc.connection_id = dc_conn.id
       WHERE dc.dashboard_id = ? AND dc.component_id IS NOT NULL
     `
       )
@@ -472,8 +478,50 @@ router.get("/:id/data", async (req, res) => {
     // Process component data
     const componentDataPromises = dashboardComponents.map(async (component) => {
       try {
-        // If component has no connection or query, return without data
-        if (!component.connection_id || !component.sql_query) {
+        let sqlQuery;
+        let connection;
+
+        // Check if component uses a dataset
+        if (component.dataset_id && component.d_id) {
+          if (component.source_type !== 'sql') {
+            return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: `Unsupported source type: ${component.source_type}` };
+          }
+
+          // Build query based on dataset type
+          if (component.dataset_type === 'physical') {
+            const schemaPrefix = component.table_schema ? `"${component.table_schema}".` : '';
+            sqlQuery = `SELECT * FROM ${schemaPrefix}"${component.table_name}"`;
+          } else if (component.dataset_type === 'virtual') {
+            sqlQuery = component.dataset_sql_query;
+          }
+
+          connection = {
+            id: component.dataset_connection_id,
+            type: component.db_type,
+            host: component.host,
+            port: component.port,
+            database_name: component.database_name,
+            username: component.username,
+            password: component.password,
+            ssl: component.ssl,
+          };
+        } else if (component.connection_id && component.sql_query) {
+          // Legacy: component uses connection directly
+          sqlQuery = component.sql_query;
+          connection = {
+            id: component.connection_id,
+            type: component.dc_db_type,
+            host: component.dc_host,
+            port: component.dc_port,
+            database_name: component.dc_database_name,
+            username: component.dc_username,
+            password: component.dc_password,
+            ssl: component.dc_ssl,
+          };
+        }
+
+        // If no data source, return without data
+        if (!sqlQuery || !connection || !connection.host) {
           return { 
             componentId: component.id, 
             dashboardChartId: component.dashboard_chart_id,
@@ -481,18 +529,7 @@ router.get("/:id/data", async (req, res) => {
           };
         }
 
-        const connection = {
-          id: component.connection_id,
-          type: component.db_type,
-          host: component.host,
-          port: component.port,
-          database_name: component.database_name,
-          username: component.username,
-          password: component.password,
-          ssl: component.ssl,
-        };
-
-        const result = await executeQuery(connection, component.sql_query);
+        const result = await executeQuery(connection, sqlQuery);
 
         return {
           componentId: component.id,

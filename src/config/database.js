@@ -199,6 +199,15 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Migration: Add dataset_id column to custom_components if not exists
+  const componentsTableInfo = db.pragma('table_info(custom_components)');
+  const hasComponentDatasetId = componentsTableInfo.some(col => col.name === 'dataset_id');
+  if (!hasComponentDatasetId) {
+    console.log('Migrating custom_components table to add dataset_id column...');
+    db.exec(`ALTER TABLE custom_components ADD COLUMN dataset_id TEXT REFERENCES datasets(id)`);
+    console.log('Custom components table migration complete!');
+  }
+
   // Create default admin user if not exists
   const adminEmail = process.env.ADMIN_EMAIL || "admin@uptake.local";
   const adminPassword = process.env.ADMIN_PASSWORD || "admin123";

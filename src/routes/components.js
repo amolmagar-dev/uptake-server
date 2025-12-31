@@ -14,10 +14,13 @@ router.get("/", (req, res) => {
     const components = db
       .prepare(
         `
-      SELECT cc.*, c.name as connection_name, c.type as connection_type,
+      SELECT cc.*, 
+             c.name as connection_name, c.type as connection_type,
+             d.name as dataset_name, d.dataset_type, d.source_type,
              u.name as created_by_name
       FROM custom_components cc
       LEFT JOIN connections c ON cc.connection_id = c.id
+      LEFT JOIN datasets d ON cc.dataset_id = d.id
       LEFT JOIN users u ON cc.created_by = u.id
       ORDER BY cc.updated_at DESC
     `
@@ -43,9 +46,12 @@ router.get("/:id", (req, res) => {
     const component = db
       .prepare(
         `
-      SELECT cc.*, c.name as connection_name, c.type as connection_type
+      SELECT cc.*, 
+             c.name as connection_name, c.type as connection_type,
+             d.name as dataset_name, d.dataset_type, d.source_type
       FROM custom_components cc
       LEFT JOIN connections c ON cc.connection_id = c.id
+      LEFT JOIN datasets d ON cc.dataset_id = d.id
       WHERE cc.id = ?
     `
       )
@@ -70,14 +76,22 @@ router.get("/:id", (req, res) => {
 // Create new component
 router.post("/", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { name, description, html_content, css_content, js_content, config, connection_id, sql_query } = req.body;
+    const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
 
     if (!name || !html_content) {
       return res.status(400).json({ error: "Name and HTML content are required" });
     }
 
-    // Validate connection if provided
-    if (connection_id) {
+    // Validate dataset if provided
+    if (dataset_id) {
+      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
+      }
+    }
+
+    // Legacy: Validate connection if provided (backward compatibility)
+    if (connection_id && !dataset_id) {
       const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
@@ -88,8 +102,8 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 
     db.prepare(
       `
-      INSERT INTO custom_components (id, name, description, html_content, css_content, js_content, config, connection_id, sql_query, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO custom_components (id, name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       componentId,
@@ -99,6 +113,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
       css_content || null,
       js_content || null,
       config ? JSON.stringify(config) : null,
+      dataset_id || null,
       connection_id || null,
       sql_query || null,
       req.user.id
@@ -113,6 +128,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
         css_content,
         js_content,
         config,
+        dataset_id,
         connection_id,
         sql_query,
       },
@@ -127,7 +143,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 // Update component
 router.put("/:id", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { name, description, html_content, css_content, js_content, config, connection_id, sql_query } = req.body;
+    const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
     const componentId = req.params.id;
 
     const existing = db.prepare("SELECT * FROM custom_components WHERE id = ?").get(componentId);
@@ -135,11 +151,11 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       return res.status(404).json({ error: "Component not found" });
     }
 
-    // Validate connection if provided
-    if (connection_id) {
-      const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
-      if (!connection) {
-        return res.status(404).json({ error: "Connection not found" });
+    // Validate dataset if provided
+    if (dataset_id) {
+      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
+      if (!dataset) {
+        return res.status(404).json({ error: "Dataset not found" });
       }
     }
 
@@ -147,7 +163,7 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       `
       UPDATE custom_components 
       SET name = ?, description = ?, html_content = ?, css_content = ?, js_content = ?,
-          config = ?, connection_id = ?, sql_query = ?, updated_at = CURRENT_TIMESTAMP
+          config = ?, dataset_id = ?, connection_id = ?, sql_query = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
     ).run(
@@ -157,6 +173,7 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       css_content !== undefined ? css_content : existing.css_content,
       js_content !== undefined ? js_content : existing.js_content,
       config ? JSON.stringify(config) : existing.config,
+      dataset_id !== undefined ? dataset_id : existing.dataset_id,
       connection_id !== undefined ? connection_id : existing.connection_id,
       sql_query !== undefined ? sql_query : existing.sql_query,
       componentId
@@ -191,14 +208,78 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
 // Get component data (execute the component's query if it has one)
 router.get("/:id/data", async (req, res) => {
   try {
-    const component = db.prepare("SELECT * FROM custom_components WHERE id = ?").get(req.params.id);
+    const component = db
+      .prepare(
+        `
+      SELECT cc.*, 
+             d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
+             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
+             dc.host as dc_host, dc.port as dc_port, dc.database_name as dc_database_name, 
+             dc.username as dc_username, dc.password as dc_password, dc.ssl as dc_ssl, dc.type as dc_db_type
+      FROM custom_components cc
+      LEFT JOIN datasets d ON cc.dataset_id = d.id
+      LEFT JOIN connections c ON d.connection_id = c.id
+      LEFT JOIN connections dc ON cc.connection_id = dc.id
+      WHERE cc.id = ?
+    `
+      )
+      .get(req.params.id);
 
     if (!component) {
       return res.status(404).json({ error: "Component not found" });
     }
 
-    // If no query, return component without data
-    if (!component.sql_query || !component.connection_id) {
+    let sqlQuery;
+    let connection;
+
+    // Check if component uses a dataset
+    if (component.dataset_id) {
+      if (component.source_type !== 'sql') {
+        return res.json({
+          component: {
+            ...component,
+            config: component.config ? JSON.parse(component.config) : {},
+          },
+          data: null,
+          error: `Unsupported source type: ${component.source_type}`,
+        });
+      }
+
+      // Build query based on dataset type
+      if (component.dataset_type === 'physical') {
+        const schemaPrefix = component.table_schema ? `"${component.table_schema}".` : '';
+        sqlQuery = `SELECT * FROM ${schemaPrefix}"${component.table_name}"`;
+      } else if (component.dataset_type === 'virtual') {
+        sqlQuery = component.dataset_sql_query;
+      }
+
+      connection = {
+        id: component.dataset_connection_id,
+        type: component.db_type,
+        host: component.host,
+        port: component.port,
+        database_name: component.database_name,
+        username: component.username,
+        password: component.password,
+        ssl: component.ssl,
+      };
+    } else if (component.connection_id && component.sql_query) {
+      // Legacy: component uses connection directly
+      sqlQuery = component.sql_query;
+      connection = {
+        id: component.connection_id,
+        type: component.dc_db_type,
+        host: component.dc_host,
+        port: component.dc_port,
+        database_name: component.dc_database_name,
+        username: component.dc_username,
+        password: component.dc_password,
+        ssl: component.dc_ssl,
+      };
+    }
+
+    // If no data source, return component without data
+    if (!sqlQuery || !connection || !connection.host) {
       return res.json({
         component: {
           ...component,
@@ -208,12 +289,7 @@ router.get("/:id/data", async (req, res) => {
       });
     }
 
-    const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(component.connection_id);
-    if (!connection) {
-      return res.status(404).json({ error: "Connection not found" });
-    }
-
-    const result = await executeQuery(connection, component.sql_query);
+    const result = await executeQuery(connection, sqlQuery);
 
     res.json({
       component: {
