@@ -112,18 +112,26 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
 
     const datasetId = uuidv4();
 
-    // Fetch columns for SQL datasets
+    // Fetch columns based on source type
     let columns = null;
-    if (source_type === 'sql' && connection_id) {
+    if (connection_id) {
       try {
         const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connection_id);
-        if (dataset_type === 'physical' && table_name) {
-          const schemaColumns = await getTableSchema(connection, table_name, table_schema);
-          columns = schemaColumns;
-        } else if (dataset_type === 'virtual' && sql_query) {
-          // Execute query with LIMIT 0 to get column info
-          const result = await executeQuery(connection, `SELECT * FROM (${sql_query}) AS subq LIMIT 0`);
-          columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+        
+        if (source_type === 'sql') {
+          if (dataset_type === 'physical' && table_name) {
+            const schemaColumns = await getTableSchema(connection, table_name, table_schema);
+            columns = schemaColumns;
+          } else if (dataset_type === 'virtual' && sql_query) {
+            const result = await executeQuery(connection, `SELECT * FROM (${sql_query}) AS subq LIMIT 0`);
+            columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+          }
+        } else if (source_type === 'api') {
+          const result = await executeApiRequest(connection);
+          columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
+        } else if (source_type === 'googlesheet') {
+          const result = await fetchGoogleSheet(connection);
+          columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
         }
       } catch (err) {
         console.warn("Could not fetch columns:", err.message);
@@ -352,30 +360,51 @@ router.get("/:id/columns", async (req, res) => {
       return res.json({ columns: JSON.parse(dataset.columns) });
     }
 
-    // Fetch columns dynamically for SQL datasets
+    let columns = [];
+
+    // Fetch columns dynamically based on source type
     if (dataset.source_type === 'sql' && dataset.connection_id) {
       const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
       }
 
-      let columns;
       if (dataset.dataset_type === 'physical' && dataset.table_name) {
         columns = await getTableSchema(connection, dataset.table_name, dataset.table_schema);
       } else if (dataset.dataset_type === 'virtual' && dataset.sql_query) {
         const result = await executeQuery(connection, `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT 0`);
         columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
       }
-
-      // Cache the columns
-      if (columns) {
-        db.prepare("UPDATE datasets SET columns = ? WHERE id = ?").run(JSON.stringify(columns), dataset.id);
+    } else if (dataset.source_type === 'api' && dataset.connection_id) {
+      // Fetch sample data from API to get columns
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (connection) {
+        try {
+          const result = await executeApiRequest(connection);
+          columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
+        } catch (err) {
+          console.warn("Could not fetch API columns:", err.message);
+        }
       }
-
-      return res.json({ columns: columns || [] });
+    } else if (dataset.source_type === 'googlesheet' && dataset.connection_id) {
+      // Fetch sample data from Google Sheets to get columns
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (connection) {
+        try {
+          const result = await fetchGoogleSheet(connection);
+          columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
+        } catch (err) {
+          console.warn("Could not fetch Google Sheets columns:", err.message);
+        }
+      }
     }
 
-    res.json({ columns: [] });
+    // Cache the columns if we got any
+    if (columns.length > 0) {
+      db.prepare("UPDATE datasets SET columns = ? WHERE id = ?").run(JSON.stringify(columns), dataset.id);
+    }
+
+    return res.json({ columns });
   } catch (error) {
     console.error("Get columns error:", error);
     res.status(400).json({ error: error.message });
@@ -391,8 +420,8 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
       return res.status(404).json({ error: "Dataset not found" });
     }
 
-    if (dataset.source_type !== 'sql' || !dataset.connection_id) {
-      return res.status(400).json({ error: "Column refresh only supported for SQL datasets" });
+    if (!dataset.connection_id) {
+      return res.status(400).json({ error: "Dataset has no connection" });
     }
 
     const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
@@ -400,20 +429,29 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
       return res.status(404).json({ error: "Connection not found" });
     }
 
-    let columns;
-    if (dataset.dataset_type === 'physical' && dataset.table_name) {
-      columns = await getTableSchema(connection, dataset.table_name, dataset.table_schema);
-    } else if (dataset.dataset_type === 'virtual' && dataset.sql_query) {
-      const result = await executeQuery(connection, `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT 0`);
-      columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+    let columns = [];
+
+    if (dataset.source_type === 'sql') {
+      if (dataset.dataset_type === 'physical' && dataset.table_name) {
+        columns = await getTableSchema(connection, dataset.table_name, dataset.table_schema);
+      } else if (dataset.dataset_type === 'virtual' && dataset.sql_query) {
+        const result = await executeQuery(connection, `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT 0`);
+        columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+      }
+    } else if (dataset.source_type === 'api') {
+      const result = await executeApiRequest(connection);
+      columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
+    } else if (dataset.source_type === 'googlesheet') {
+      const result = await fetchGoogleSheet(connection);
+      columns = result.fields.map(f => ({ column_name: f.name, data_type: 'text' }));
     }
 
-    if (columns) {
+    if (columns.length > 0) {
       db.prepare("UPDATE datasets SET columns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
         .run(JSON.stringify(columns), dataset.id);
     }
 
-    res.json({ columns: columns || [], message: "Columns refreshed successfully" });
+    res.json({ columns, message: "Columns refreshed successfully" });
   } catch (error) {
     console.error("Refresh columns error:", error);
     res.status(400).json({ error: error.message });

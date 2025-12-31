@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
 import { executeQuery } from "../services/databaseConnector.js";
+import { executeApiRequest } from "../services/apiConnector.js";
+import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
 const router = Router();
 
@@ -221,34 +223,41 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Chart not found" });
     }
 
-    let sqlQuery = chart.sql_query;
-    let connection;
+    let result;
 
-    // If chart uses a dataset, get query from dataset
+    // If chart uses a dataset, get data from dataset
     if (chart.dataset_id) {
       const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(chart.dataset_id);
       if (!dataset) {
         return res.status(404).json({ error: "Associated dataset not found" });
       }
 
-      if (dataset.source_type !== 'sql') {
-        return res.status(400).json({ error: `Data fetching for ${dataset.source_type} source type not supported yet` });
-      }
-
-      connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Dataset connection not found" });
       }
 
-      // Build query based on dataset type
-      if (dataset.dataset_type === 'physical') {
-        const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
-        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
-      } else if (dataset.dataset_type === 'virtual') {
-        sqlQuery = dataset.sql_query;
+      if (dataset.source_type === 'sql') {
+        // Build SQL query based on dataset type
+        let sqlQuery;
+        if (dataset.dataset_type === 'physical') {
+          const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+          sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+        } else if (dataset.dataset_type === 'virtual') {
+          sqlQuery = dataset.sql_query;
+        }
+        result = await executeQuery(connection, sqlQuery);
+      } else if (dataset.source_type === 'api') {
+        result = await executeApiRequest(connection);
+      } else if (dataset.source_type === 'googlesheet') {
+        result = await fetchGoogleSheet(connection);
+      } else {
+        return res.status(400).json({ error: `Unsupported source type: ${dataset.source_type}` });
       }
     } else {
       // Legacy: chart uses connection directly
+      let sqlQuery = chart.sql_query;
+      
       if (chart.query_id && !sqlQuery) {
         const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
         if (!savedQuery) {
@@ -261,13 +270,13 @@ router.get("/:id/data", async (req, res) => {
         return res.status(400).json({ error: "No SQL query associated with this chart" });
       }
 
-      connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(chart.connection_id);
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(chart.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
       }
-    }
 
-    const result = await executeQuery(connection, sqlQuery);
+      result = await executeQuery(connection, sqlQuery);
+    }
 
     res.json({
       data: result.rows,
