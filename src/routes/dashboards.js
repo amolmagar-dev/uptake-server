@@ -351,7 +351,7 @@ router.delete("/:id/charts/:chartId", requireRole("admin", "editor"), (req, res)
   }
 });
 
-// Get all chart data for a dashboard
+// Get all chart and component data for a dashboard
 router.get("/:id/data", async (req, res) => {
   try {
     const dashboard = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(req.params.id);
@@ -360,6 +360,7 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Dashboard not found" });
     }
 
+    // Get chart data
     const dashboardCharts = db
       .prepare(
         `
@@ -367,11 +368,25 @@ router.get("/:id/data", async (req, res) => {
       FROM dashboard_charts dc
       JOIN charts ch ON dc.chart_id = ch.id
       JOIN connections c ON ch.connection_id = c.id
-      WHERE dc.dashboard_id = ?
+      WHERE dc.dashboard_id = ? AND dc.chart_id IS NOT NULL
     `
       )
       .all(req.params.id);
 
+    // Get component data
+    const dashboardComponents = db
+      .prepare(
+        `
+      SELECT dc.id as dashboard_chart_id, cc.*, c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type
+      FROM dashboard_charts dc
+      JOIN custom_components cc ON dc.component_id = cc.id
+      LEFT JOIN connections c ON cc.connection_id = c.id
+      WHERE dc.dashboard_id = ? AND dc.component_id IS NOT NULL
+    `
+      )
+      .all(req.params.id);
+
+    // Process chart data
     const chartDataPromises = dashboardCharts.map(async (chart) => {
       try {
         let sqlQuery = chart.sql_query;
@@ -413,8 +428,55 @@ router.get("/:id/data", async (req, res) => {
       }
     });
 
-    const chartData = await Promise.all(chartDataPromises);
-    res.json({ chartData });
+    // Process component data
+    const componentDataPromises = dashboardComponents.map(async (component) => {
+      try {
+        // If component has no connection or query, return without data
+        if (!component.connection_id || !component.sql_query) {
+          return { 
+            componentId: component.id, 
+            dashboardChartId: component.dashboard_chart_id,
+            data: null 
+          };
+        }
+
+        const connection = {
+          id: component.connection_id,
+          type: component.db_type,
+          host: component.host,
+          port: component.port,
+          database_name: component.database_name,
+          username: component.username,
+          password: component.password,
+          ssl: component.ssl,
+        };
+
+        const result = await executeQuery(connection, component.sql_query);
+
+        return {
+          componentId: component.id,
+          dashboardChartId: component.dashboard_chart_id,
+          data: result.rows,
+          fields: result.fields,
+          rowCount: result.rowCount,
+        };
+      } catch (error) {
+        return { componentId: component.id, dashboardChartId: component.dashboard_chart_id, error: error.message };
+      }
+    });
+
+    const [chartData, componentData] = await Promise.all([
+      Promise.all(chartDataPromises),
+      Promise.all(componentDataPromises)
+    ]);
+
+    // Combine chart and component data, using chartId field for backward compatibility
+    const allData = [
+      ...chartData,
+      ...componentData.map(c => ({ ...c, chartId: c.componentId }))
+    ];
+
+    res.json({ chartData: allData });
   } catch (error) {
     console.error("Get dashboard data error:", error);
     res.status(500).json({ error: "Failed to fetch dashboard data" });
