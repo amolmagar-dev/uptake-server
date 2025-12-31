@@ -7,7 +7,7 @@ import { chat } from "@tanstack/ai";
 import { geminiText } from "@tanstack/ai-gemini";
 import { getAllTools } from "./tools/index.js";
 
-const DEFAULT_MODEL = "gemini-2.0-flash";
+const DEFAULT_MODEL = "gemini-2.5-pro";
 
 const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You have full access to the project's capabilities through tools.
 

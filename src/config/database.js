@@ -96,18 +96,73 @@ export async function initializeDatabase() {
     )
   `);
 
-  // Dashboard charts junction table
+  // Dashboard charts junction table (supports both charts and custom components)
+  // Check if we need to migrate the old table (chart_id was NOT NULL before)
+  const tableInfo = db.pragma('table_info(dashboard_charts)');
+  const needsMigration = tableInfo.some(col => col.name === 'chart_id' && col.notnull === 1);
+  
+  if (needsMigration) {
+    console.log('Migrating dashboard_charts table to support custom components...');
+    // Backup existing data
+    db.exec(`CREATE TABLE IF NOT EXISTS dashboard_charts_backup AS SELECT * FROM dashboard_charts`);
+    // Drop old table
+    db.exec(`DROP TABLE dashboard_charts`);
+    // Create new table with nullable chart_id and component_id
+    db.exec(`
+      CREATE TABLE dashboard_charts (
+        id TEXT PRIMARY KEY,
+        dashboard_id TEXT NOT NULL,
+        chart_id TEXT,
+        component_id TEXT,
+        position_x INTEGER DEFAULT 0,
+        position_y INTEGER DEFAULT 0,
+        width INTEGER DEFAULT 6,
+        height INTEGER DEFAULT 4,
+        FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE,
+        FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE,
+        FOREIGN KEY (component_id) REFERENCES custom_components(id) ON DELETE CASCADE
+      )
+    `);
+    // Restore data
+    db.exec(`INSERT INTO dashboard_charts SELECT *, NULL FROM dashboard_charts_backup`);
+    db.exec(`DROP TABLE dashboard_charts_backup`);
+    console.log('Migration complete!');
+  } else if (tableInfo.length === 0) {
+    // Table doesn't exist, create it fresh
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS dashboard_charts (
+        id TEXT PRIMARY KEY,
+        dashboard_id TEXT NOT NULL,
+        chart_id TEXT,
+        component_id TEXT,
+        position_x INTEGER DEFAULT 0,
+        position_y INTEGER DEFAULT 0,
+        width INTEGER DEFAULT 6,
+        height INTEGER DEFAULT 4,
+        FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE,
+        FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE,
+        FOREIGN KEY (component_id) REFERENCES custom_components(id) ON DELETE CASCADE
+      )
+    `);
+  }
+
+  // Custom components table for user-created HTML/CSS/JS components
   db.exec(`
-    CREATE TABLE IF NOT EXISTS dashboard_charts (
+    CREATE TABLE IF NOT EXISTS custom_components (
       id TEXT PRIMARY KEY,
-      dashboard_id TEXT NOT NULL,
-      chart_id TEXT NOT NULL,
-      position_x INTEGER DEFAULT 0,
-      position_y INTEGER DEFAULT 0,
-      width INTEGER DEFAULT 6,
-      height INTEGER DEFAULT 4,
-      FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE,
-      FOREIGN KEY (chart_id) REFERENCES charts(id) ON DELETE CASCADE
+      name TEXT NOT NULL,
+      description TEXT,
+      html_content TEXT NOT NULL,
+      css_content TEXT,
+      js_content TEXT,
+      config TEXT,
+      connection_id TEXT,
+      sql_query TEXT,
+      created_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (connection_id) REFERENCES connections(id),
+      FOREIGN KEY (created_by) REFERENCES users(id)
     )
   `);
 

@@ -17,6 +17,7 @@ import queryRoutes from "./routes/queries.js";
 import chartRoutes from "./routes/charts.js";
 import dashboardRoutes from "./routes/dashboards.js";
 import aiRoutes from "./routes/ai.js";
+import componentRoutes from "./routes/components.js";
 
 // Import database initialization
 import { initializeDatabase } from "./config/database.js";
@@ -97,6 +98,7 @@ app.use("/api/queries", queryRoutes);
 app.use("/api/charts", chartRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/components", componentRoutes);
 
 // 404 handler
 app.use((req, res) => {

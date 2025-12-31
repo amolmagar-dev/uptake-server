@@ -78,7 +78,7 @@ router.get("/", (req, res) => {
   }
 });
 
-// Get single dashboard with charts
+// Get single dashboard with charts and components
 router.get("/:id", async (req, res) => {
   try {
     const dashboard = db
@@ -96,27 +96,54 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ error: "Dashboard not found" });
     }
 
-    const dashboardCharts = db
+    // Get dashboard items (both charts and custom components)
+    const dashboardItems = db
       .prepare(
         `
-      SELECT dc.*, ch.name, ch.chart_type, ch.config, ch.sql_query, ch.query_id, ch.connection_id,
-             c.name as connection_name
+      SELECT dc.*, 
+             ch.name as chart_name, ch.chart_type, ch.config as chart_config, ch.sql_query as chart_sql_query, ch.query_id, ch.connection_id as chart_connection_id,
+             c.name as chart_connection_name,
+             cc.name as component_name, cc.html_content, cc.css_content, cc.js_content, cc.config as component_config, cc.sql_query as component_sql_query, cc.connection_id as component_connection_id
       FROM dashboard_charts dc
-      JOIN charts ch ON dc.chart_id = ch.id
+      LEFT JOIN charts ch ON dc.chart_id = ch.id
       LEFT JOIN connections c ON ch.connection_id = c.id
+      LEFT JOIN custom_components cc ON dc.component_id = cc.id
       WHERE dc.dashboard_id = ?
     `
       )
       .all(req.params.id);
 
+    // Transform to unified format
+    const items = dashboardItems.map((item) => {
+      if (item.chart_id) {
+        return {
+          ...item,
+          type: 'chart',
+          name: item.chart_name,
+          chart_type: item.chart_type,
+          config: item.chart_config ? JSON.parse(item.chart_config) : {},
+          sql_query: item.chart_sql_query,
+          connection_id: item.chart_connection_id,
+          connection_name: item.chart_connection_name,
+        };
+      } else if (item.component_id) {
+        return {
+          ...item,
+          type: 'component',
+          name: item.component_name,
+          config: item.component_config ? JSON.parse(item.component_config) : {},
+          sql_query: item.component_sql_query,
+          connection_id: item.component_connection_id,
+        };
+      }
+      return item;
+    });
+
     res.json({
       dashboard: {
         ...dashboard,
         layout: JSON.parse(dashboard.layout),
-        charts: dashboardCharts.map((c) => ({
-          ...c,
-          config: JSON.parse(c.config),
-        })),
+        charts: items, // Keep as 'charts' for backward compatibility
       },
     });
   } catch (error) {
@@ -212,38 +239,51 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
   }
 });
 
-// Add chart to dashboard
+// Add chart or component to dashboard
 router.post("/:id/charts", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { chart_id, position_x = 0, position_y = 0, width = 6, height = 4 } = req.body;
+    const { chart_id, component_id, position_x = 0, position_y = 0, width = 6, height = 4 } = req.body;
     const dashboardId = req.params.id;
+
+    if (!chart_id && !component_id) {
+      return res.status(400).json({ error: "Either chart_id or component_id is required" });
+    }
 
     const dashboard = db.prepare("SELECT id FROM dashboards WHERE id = ?").get(dashboardId);
     if (!dashboard) {
       return res.status(404).json({ error: "Dashboard not found" });
     }
 
-    const chart = db.prepare("SELECT id FROM charts WHERE id = ?").get(chart_id);
-    if (!chart) {
-      return res.status(404).json({ error: "Chart not found" });
+    // Validate chart or component exists
+    if (chart_id) {
+      const chart = db.prepare("SELECT id FROM charts WHERE id = ?").get(chart_id);
+      if (!chart) {
+        return res.status(404).json({ error: "Chart not found" });
+      }
+    }
+    if (component_id) {
+      const component = db.prepare("SELECT id FROM custom_components WHERE id = ?").get(component_id);
+      if (!component) {
+        return res.status(404).json({ error: "Component not found" });
+      }
     }
 
     const id = uuidv4();
 
     db.prepare(
       `
-      INSERT INTO dashboard_charts (id, dashboard_id, chart_id, position_x, position_y, width, height)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO dashboard_charts (id, dashboard_id, chart_id, component_id, position_x, position_y, width, height)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `
-    ).run(id, dashboardId, chart_id, position_x, position_y, width, height);
+    ).run(id, dashboardId, chart_id || null, component_id || null, position_x, position_y, width, height);
 
     res.status(201).json({
-      dashboardChart: { id, dashboard_id: dashboardId, chart_id, position_x, position_y, width, height },
-      message: "Chart added to dashboard",
+      dashboardChart: { id, dashboard_id: dashboardId, chart_id, component_id, position_x, position_y, width, height },
+      message: chart_id ? "Chart added to dashboard" : "Component added to dashboard",
     });
   } catch (error) {
-    console.error("Add chart to dashboard error:", error);
-    res.status(500).json({ error: "Failed to add chart to dashboard" });
+    console.error("Add chart/component to dashboard error:", error);
+    res.status(500).json({ error: "Failed to add item to dashboard" });
   }
 });
 
