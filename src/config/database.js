@@ -45,6 +45,15 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Migration: Add config column to connections for API and Google Sheets
+  const connectionsTableInfo = db.pragma('table_info(connections)');
+  const hasConfigColumn = connectionsTableInfo.some(col => col.name === 'config');
+  if (!hasConfigColumn) {
+    console.log('Migrating connections table to add config column...');
+    db.exec(`ALTER TABLE connections ADD COLUMN config TEXT`);
+    console.log('Connections table migration complete!');
+  }
+
   // Saved queries table
   db.exec(`
     CREATE TABLE IF NOT EXISTS saved_queries (

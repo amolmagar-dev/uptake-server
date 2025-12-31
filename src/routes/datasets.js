@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
 import { executeQuery, getTableList, getTableSchema } from "../services/databaseConnector.js";
+import { executeApiRequest } from "../services/apiConnector.js";
+import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
 const router = Router();
 
@@ -285,24 +287,44 @@ router.get("/:id/preview", async (req, res) => {
       return res.status(404).json({ error: "Dataset not found" });
     }
 
-    if (dataset.source_type !== 'sql') {
-      return res.status(400).json({ error: `Preview not supported for ${dataset.source_type} source type yet` });
-    }
+    let result;
 
-    const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
-    if (!connection) {
-      return res.status(404).json({ error: "Connection not found" });
-    }
+    if (dataset.source_type === 'sql') {
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "Connection not found" });
+      }
 
-    let sqlQuery;
-    if (dataset.dataset_type === 'physical') {
-      const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
-      sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}" LIMIT 100`;
+      let sqlQuery;
+      if (dataset.dataset_type === 'physical') {
+        const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}" LIMIT 100`;
+      } else {
+        sqlQuery = `SELECT * FROM (${dataset.sql_query}) AS preview_subquery LIMIT 100`;
+      }
+
+      result = await executeQuery(connection, sqlQuery);
+    } else if (dataset.source_type === 'api') {
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "API connection not found" });
+      }
+      result = await executeApiRequest(connection);
+      // Limit to 100 rows for preview
+      result.rows = result.rows.slice(0, 100);
+      result.rowCount = result.rows.length;
+    } else if (dataset.source_type === 'googlesheet') {
+      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      if (!connection) {
+        return res.status(404).json({ error: "Google Sheets connection not found" });
+      }
+      result = await fetchGoogleSheet(connection);
+      // Limit to 100 rows for preview
+      result.rows = result.rows.slice(0, 100);
+      result.rowCount = result.rows.length;
     } else {
-      sqlQuery = `SELECT * FROM (${dataset.sql_query}) AS preview_subquery LIMIT 100`;
+      return res.status(400).json({ error: `Unsupported source type: ${dataset.source_type}` });
     }
-
-    const result = await executeQuery(connection, sqlQuery);
 
     res.json({
       data: result.rows,
