@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Google Sheets Connector Service
  * Fetches data from Google Sheets

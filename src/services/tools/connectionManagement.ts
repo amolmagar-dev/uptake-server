@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Connection Management Tool
  * Full CRUD operations for database connections

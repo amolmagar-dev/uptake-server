@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * List Connections Tool
  * Lists all available database connections

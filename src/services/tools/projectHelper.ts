@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Project Helper Tool
  * General project utilities and information

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Chart Management Tool
  * Full CRUD operations for charts

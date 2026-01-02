@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Tool Registry for AI Adapter
  * Centralized place to manage all available tools

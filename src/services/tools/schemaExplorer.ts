@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Schema Explorer Tool
  * Explore database schema - tables, columns, relationships

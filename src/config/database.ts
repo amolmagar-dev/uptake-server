@@ -9,10 +9,10 @@ const __dirname = dirname(__filename);
 
 // Local SQLite database for storing app data (connections, dashboards, charts, users)
 const dbPath = join(__dirname, "../../data/uptake.db");
-const db = new Database(dbPath);
+const db: Database.Database = new Database(dbPath);
 
 // Initialize tables
-export async function initializeDatabase() {
+export async function initializeDatabase(): Promise<void> {
   // Users table
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -46,7 +46,7 @@ export async function initializeDatabase() {
   `);
 
   // Migration: Add config column to connections for API and Google Sheets
-  const connectionsTableInfo = db.pragma('table_info(connections)');
+  const connectionsTableInfo = db.pragma('table_info(connections)') as Array<{ name: string }>;
   const hasConfigColumn = connectionsTableInfo.some(col => col.name === 'config');
   if (!hasConfigColumn) {
     console.log('Migrating connections table to add config column...');
@@ -115,8 +115,8 @@ export async function initializeDatabase() {
   `);
 
   // Migration: Add dataset_id column to existing charts table if not exists
-  const chartsTableInfo = db.pragma('table_info(charts)');
-  const hasDatasetId = chartsTableInfo.some(col => col.name === 'dataset_id');
+  const chartsTableInfo = db.pragma('table_info(charts)') as Array<{ name: string }>;
+  const hasDatasetId = chartsTableInfo.some((col) => col.name === 'dataset_id');
   if (!hasDatasetId) {
     console.log('Migrating charts table to add dataset_id column...');
     db.exec(`ALTER TABLE charts ADD COLUMN dataset_id TEXT REFERENCES datasets(id)`);
@@ -139,8 +139,8 @@ export async function initializeDatabase() {
   `);
 
   // Migration: Add filters column to dashboards table
-  const dashboardsTableInfo = db.pragma('table_info(dashboards)');
-  const hasFiltersColumn = dashboardsTableInfo.some(col => col.name === 'filters');
+  const dashboardsTableInfo = db.pragma('table_info(dashboards)') as Array<{ name: string }>;
+  const hasFiltersColumn = dashboardsTableInfo.some((col) => col.name === 'filters');
   if (!hasFiltersColumn) {
     console.log('Migrating dashboards table to add filters column...');
     db.exec(`ALTER TABLE dashboards ADD COLUMN filters TEXT DEFAULT '[]'`);
@@ -149,8 +149,8 @@ export async function initializeDatabase() {
 
   // Dashboard charts junction table (supports both charts and custom components)
   // Check if we need to migrate the old table (chart_id was NOT NULL before)
-  const tableInfo = db.pragma('table_info(dashboard_charts)');
-  const needsMigration = tableInfo.some(col => col.name === 'chart_id' && col.notnull === 1);
+  const tableInfo = db.pragma('table_info(dashboard_charts)') as Array<{ name: string; notnull: number }>;
+  const needsMigration = tableInfo.some((col) => col.name === 'chart_id' && col.notnull === 1);
   
   if (needsMigration) {
     console.log('Migrating dashboard_charts table to support custom components...');
@@ -218,8 +218,8 @@ export async function initializeDatabase() {
   `);
 
   // Migration: Add dataset_id column to custom_components if not exists
-  const componentsTableInfo = db.pragma('table_info(custom_components)');
-  const hasComponentDatasetId = componentsTableInfo.some(col => col.name === 'dataset_id');
+  const componentsTableInfo = db.pragma('table_info(custom_components)') as Array<{ name: string }>;
+  const hasComponentDatasetId = componentsTableInfo.some((col) => col.name === 'dataset_id');
   if (!hasComponentDatasetId) {
     console.log('Migrating custom_components table to add dataset_id column...');
     db.exec(`ALTER TABLE custom_components ADD COLUMN dataset_id TEXT REFERENCES datasets(id)`);

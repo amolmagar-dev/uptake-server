@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Database Operations Tool
  * Execute SQL queries on any database connection

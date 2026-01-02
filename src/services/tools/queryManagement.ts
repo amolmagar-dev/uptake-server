@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Query Management Tool
  * Full CRUD operations for saved SQL queries

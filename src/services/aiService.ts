@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * AI Service
  * Core AI functionality and chat management

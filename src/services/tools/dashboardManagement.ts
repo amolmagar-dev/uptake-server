@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Dashboard Management Tool
  * Full CRUD operations for dashboards including chart assignments

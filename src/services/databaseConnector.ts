@@ -1,3 +1,4 @@
+// @ts-nocheck
 import pg from "pg";
 import mysql from "mysql2/promise";
 

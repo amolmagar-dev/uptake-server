@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response, ErrorRequestHandler } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -84,7 +84,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Health check endpoint
-app.get("/api/health", (req, res) => {
+app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     version: "1.0.0",
@@ -103,17 +103,18 @@ app.use("/api/components", componentRoutes);
 app.use("/api/datasets", datasetRoutes);
 
 // 404 handler
-app.use((req, res) => {
+app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: "Endpoint not found" });
 });
 
 // Global error handler
-app.use((err, req, res, next) => {
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   console.error("Error:", err);
   res.status(err.status || 500).json({
     error: err.message || "Internal server error",
   });
-});
+};
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`

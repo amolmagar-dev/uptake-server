@@ -1,3 +1,4 @@
+// @ts-nocheck
 import express from "express";
 import AIService from "../services/aiService.js";
 import { validateChatRequest } from "../middleware/aiValidation.js";

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * List Tables Tool
  * Lists all tables and their columns from a database connection

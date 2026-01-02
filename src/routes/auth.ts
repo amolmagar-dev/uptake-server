@@ -1,29 +1,33 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import db from "../config/database.js";
 import { generateToken, authenticateToken } from "../middleware/auth.js";
+import { User, UserProfile } from "../types/database.js";
 
 const router = Router();
 
 // Login
-router.post("/login", async (req, res) => {
+router.post("/login", async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      res.status(400).json({ error: " and password are required" });
+      return;
     }
 
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as User | undefined;
 
     if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      res.status(401).json({ error: "Invalid credentials" });
+      return;
     }
 
     const token = generateToken(user.id);
@@ -44,17 +48,19 @@ router.post("/login", async (req, res) => {
 });
 
 // Register
-router.post("/register", async (req, res) => {
+router.post("/register", async (req: Request, res: Response) => {
   try {
     const { email, password, name } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      res.status(400).json({ error: "Email and password are required" });
+      return;
     }
 
     const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
     if (existingUser) {
-      return res.status(409).json({ error: "Email already registered" });
+      res.status(409).json({ error: "Email already registered" });
+      return;
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -65,7 +71,7 @@ router.post("/register", async (req, res) => {
       INSERT INTO users (id, email, password, name, role)
       VALUES (?, ?, ?, ?, ?)
     `
-    ).run(userId, email, hashedPassword, name || email.split("@")[0], "viewer");
+    ).run(userId, email, hashedPassword, name || email.split("@")[0]!, "viewer");
 
     const token = generateToken(userId);
 
@@ -74,7 +80,7 @@ router.post("/register", async (req, res) => {
       user: {
         id: userId,
         email,
-        name: name || email.split("@")[0],
+        name: name || email.split("@")[0]!,
         role: "viewer",
       },
     });
@@ -85,26 +91,28 @@ router.post("/register", async (req, res) => {
 });
 
 // Get current user
-router.get("/me", authenticateToken, (req, res) => {
+router.get("/me", authenticateToken, (req: Request, res: Response) => {
   res.json({ user: req.user });
 });
 
 // Update profile
-router.put("/profile", authenticateToken, async (req, res) => {
+router.put("/profile", authenticateToken, async (req: Request, res: Response) => {
   try {
     const { name, currentPassword, newPassword } = req.body;
-    const userId = req.user.id;
+    const userId = req.user!.id;
 
     if (newPassword) {
       if (!currentPassword) {
-        return res.status(400).json({ error: "Current password is required to change password" });
+        res.status(400).json({ error: "Current password is required to change password" });
+        return;
       }
 
-      const user = db.prepare("SELECT password FROM users WHERE id = ?").get(userId);
+      const user = db.prepare("SELECT password FROM users WHERE id = ?").get(userId) as Pick<User, 'password'>;
       const validPassword = await bcrypt.compare(currentPassword, user.password);
 
       if (!validPassword) {
-        return res.status(401).json({ error: "Current password is incorrect" });
+        res.status(401).json({ error: "Current password is incorrect" });
+        return;
       }
 
       const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -118,7 +126,7 @@ router.put("/profile", authenticateToken, async (req, res) => {
       db.prepare("UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(name, userId);
     }
 
-    const updatedUser = db.prepare("SELECT id, email, name, role FROM users WHERE id = ?").get(userId);
+    const updatedUser = db.prepare("SELECT id, email, name, role FROM users WHERE id = ?").get(userId) as UserProfile;
     res.json({ user: updatedUser });
   } catch (error) {
     console.error("Profile update error:", error);

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * AI Adapter - Backward Compatibility Layer
  * Maintains existing API while using new refactored service

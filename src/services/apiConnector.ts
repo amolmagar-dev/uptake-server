@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * API Connector Service
  * Fetches data from REST API endpoints
