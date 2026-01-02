@@ -138,6 +138,15 @@ export async function initializeDatabase() {
     )
   `);
 
+  // Migration: Add filters column to dashboards table
+  const dashboardsTableInfo = db.pragma('table_info(dashboards)');
+  const hasFiltersColumn = dashboardsTableInfo.some(col => col.name === 'filters');
+  if (!hasFiltersColumn) {
+    console.log('Migrating dashboards table to add filters column...');
+    db.exec(`ALTER TABLE dashboards ADD COLUMN filters TEXT DEFAULT '[]'`);
+    console.log('Dashboards table migration complete!');
+  }
+
   // Dashboard charts junction table (supports both charts and custom components)
   // Check if we need to migrate the old table (chart_id was NOT NULL before)
   const tableInfo = db.pragma('table_info(dashboard_charts)');

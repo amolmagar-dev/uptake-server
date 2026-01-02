@@ -145,6 +145,7 @@ router.get("/:id", async (req, res) => {
       dashboard: {
         ...dashboard,
         layout: JSON.parse(dashboard.layout),
+        filters: JSON.parse(dashboard.filters || '[]'),
         charts: items, // Keep as 'charts' for backward compatibility
       },
     });
@@ -191,7 +192,7 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 // Update dashboard
 router.put("/:id", requireRole("admin", "editor"), (req, res) => {
   try {
-    const { name, description, layout, is_public } = req.body;
+    const { name, description, layout, is_public, filters } = req.body;
     const dashboardId = req.params.id;
 
     const existing = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(dashboardId);
@@ -202,7 +203,7 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
     db.prepare(
       `
       UPDATE dashboards 
-      SET name = ?, description = ?, layout = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
+      SET name = ?, description = ?, layout = ?, is_public = ?, filters = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
     ).run(
@@ -210,6 +211,7 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
       description !== undefined ? description : existing.description,
       layout ? JSON.stringify(layout) : existing.layout,
       is_public !== undefined ? (is_public ? 1 : 0) : existing.is_public,
+      filters ? JSON.stringify(filters) : (existing.filters || '[]'),
       dashboardId
     );
 
