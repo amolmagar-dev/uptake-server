@@ -243,6 +243,76 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
   }
 });
 
+// Clone dashboard
+router.post("/:id/clone", requireRole("admin", "editor"), (req, res) => {
+  try {
+    const sourceDashboardId = req.params.id;
+
+    // Get the source dashboard
+    const sourceDashboard = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(sourceDashboardId);
+    if (!sourceDashboard) {
+      return res.status(404).json({ error: "Dashboard not found" });
+    }
+
+    // Create new dashboard with copied data
+    const newDashboardId = uuidv4();
+    const newName = `${sourceDashboard.name} (Copy)`;
+
+    db.prepare(
+      `
+      INSERT INTO dashboards (id, name, description, layout, is_public, filters, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `
+    ).run(
+      newDashboardId,
+      newName,
+      sourceDashboard.description,
+      sourceDashboard.layout,
+      0, // Always set cloned dashboards to private
+      sourceDashboard.filters || '[]',
+      req.user.id
+    );
+
+    // Get all charts/components from source dashboard
+    const sourceCharts = db
+      .prepare("SELECT * FROM dashboard_charts WHERE dashboard_id = ?")
+      .all(sourceDashboardId);
+
+    // Clone all charts/components
+    for (const chart of sourceCharts) {
+      const newChartId = uuidv4();
+      db.prepare(
+        `
+        INSERT INTO dashboard_charts (id, dashboard_id, chart_id, component_id, position_x, position_y, width, height)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `
+      ).run(
+        newChartId,
+        newDashboardId,
+        chart.chart_id,
+        chart.component_id,
+        chart.position_x,
+        chart.position_y,
+        chart.width,
+        chart.height
+      );
+    }
+
+    res.status(201).json({
+      dashboard: {
+        id: newDashboardId,
+        name: newName,
+        description: sourceDashboard.description,
+        is_public: 0,
+      },
+      message: "Dashboard cloned successfully",
+    });
+  } catch (error) {
+    console.error("Clone dashboard error:", error);
+    res.status(500).json({ error: "Failed to clone dashboard" });
+  }
+});
+
 // Add chart or component to dashboard
 router.post("/:id/charts", requireRole("admin", "editor"), (req, res) => {
   try {
