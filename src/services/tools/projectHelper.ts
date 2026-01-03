@@ -1,209 +1,118 @@
 // @ts-nocheck
 /**
  * Project Helper Tool
- * General project utilities and information
+ * Provides project overview, search, and help functionality
  */
 
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import db from "../../config/database.js";
+import { prisma } from "../../db/client.js";
 
 const projectHelperDef = toolDefinition({
   name: "project_helper",
-  description: `Get project-wide information and summaries. Supported actions:
-- overview: Get complete project overview (connections, charts, dashboards counts)
-- recent_activity: Get recently created/modified items
-- search: Search across all project items (connections, charts, dashboards, queries) by name
-- help: Get help on how to use the chatbot capabilities
-Use this for general project inquiries, summaries, and when user needs guidance.`,
+  description: `Get project overview, search for specific items, or get help with available capabilities.
+  
+This tool helps you understand the current state of the project:
+- Get counts of connections, charts, dashboards, and queries
+- Search for items by name or type
+- Get information about available tools and features`,
   inputSchema: z.object({
-    action: z.enum(["overview", "recent_activity", "search", "help"]).describe("The action to perform"),
-    searchQuery: z.string().optional().describe("Search query text (for search action)"),
-    limit: z.number().optional().describe("Number of recent items to return (default: 5)"),
+    action: z
+      .enum(["overview", "search", "help"])
+      .describe("The action to perform"),
+    searchTerm: z
+      .string()
+      .optional()
+      .describe("Search term for finding charts, dashboards, connections, or queries (for search action)"),
   }),
 });
 
-const projectHelper = projectHelperDef.server(async ({ action, searchQuery, limit = 5 }) => {
+const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => {
   try {
     switch (action) {
       case "overview": {
-        const connectionCount = db.prepare("SELECT COUNT(*) as count FROM connections").get().count;
-        const chartCount = db.prepare("SELECT COUNT(*) as count FROM charts").get().count;
-        const dashboardCount = db.prepare("SELECT COUNT(*) as count FROM dashboards").get().count;
-        const queryCount = db.prepare("SELECT COUNT(*) as count FROM saved_queries").get().count;
-        const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
-
-        // Get connection types breakdown
-        const connectionTypes = db
-          .prepare(
-            "SELECT type, COUNT(*) as count FROM connections GROUP BY type"
-          )
-          .all();
-
-        // Get chart types breakdown
-        const chartTypes = db
-          .prepare(
-            "SELECT chart_type, COUNT(*) as count FROM charts GROUP BY chart_type"
-          )
-          .all();
-
-        // Get public vs private dashboards
-        const publicDashboards = db
-          .prepare("SELECT COUNT(*) as count FROM dashboards WHERE is_public = 1")
-          .get().count;
+        // Get counts of all major entities
+        const [connectionsCount, chartsCount, dashboardsCount, queriesCount, datasetsCount, componentsCount] = await Promise.all([
+          prisma.connection.count(),
+          prisma.chart.count(),
+          prisma.dashboard.count(),
+          prisma.savedQuery.count(),
+          prisma.dataset.count(),
+          prisma.customComponent.count(),
+        ]);
 
         return {
           success: true,
           action: "overview",
-          summary: {
-            totalConnections: connectionCount,
-            totalCharts: chartCount,
-            totalDashboards: dashboardCount,
-            totalSavedQueries: queryCount,
-            totalUsers: userCount,
+          counts: {
+            connections: connectionsCount,
+            charts: chartsCount,
+            dashboards: dashboardsCount,
+            savedQueries: queriesCount,
+            datasets: datasetsCount,
+            customComponents: componentsCount,
           },
-          connectionsByType: connectionTypes.reduce((acc, c) => {
-            acc[c.type] = c.count;
-            return acc;
-          }, {}),
-          chartsByType: chartTypes.reduce((acc, c) => {
-            acc[c.chart_type] = c.count;
-            return acc;
-          }, {}),
-          dashboardVisibility: {
-            public: publicDashboards,
-            private: dashboardCount - publicDashboards,
-          },
-          capabilities: [
-            "Execute SQL queries on connected databases",
-            "Create and manage database connections",
-            "Build charts and visualizations",
-            "Create dashboards with multiple charts",
-            "Save and reuse SQL queries",
-            "Explore database schemas",
-          ],
-        };
-      }
-
-      case "recent_activity": {
-        const safeLimit = Math.min(Math.max(1, limit), 20);
-
-        const recentCharts = db
-          .prepare(
-            `SELECT id, name, chart_type, updated_at, 'chart' as item_type 
-             FROM charts ORDER BY updated_at DESC LIMIT ?`
-          )
-          .all(safeLimit);
-
-        const recentDashboards = db
-          .prepare(
-            `SELECT id, name, updated_at, 'dashboard' as item_type 
-             FROM dashboards ORDER BY updated_at DESC LIMIT ?`
-          )
-          .all(safeLimit);
-
-        const recentQueries = db
-          .prepare(
-            `SELECT id, name, updated_at, 'query' as item_type 
-             FROM saved_queries ORDER BY updated_at DESC LIMIT ?`
-          )
-          .all(safeLimit);
-
-        const recentConnections = db
-          .prepare(
-            `SELECT id, name, type, updated_at, 'connection' as item_type 
-             FROM connections ORDER BY updated_at DESC LIMIT ?`
-          )
-          .all(safeLimit);
-
-        // Combine and sort by updated_at
-        const allRecent = [
-          ...recentCharts,
-          ...recentDashboards,
-          ...recentQueries,
-          ...recentConnections,
-        ]
-          .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
-          .slice(0, safeLimit);
-
-        return {
-          success: true,
-          action: "recent_activity",
-          recentItems: allRecent.map((item) => ({
-            id: item.id,
-            name: item.name,
-            type: item.item_type,
-            subType: item.chart_type || item.type || null,
-            updatedAt: item.updated_at,
-          })),
-          breakdown: {
-            charts: recentCharts.length,
-            dashboards: recentDashboards.length,
-            queries: recentQueries.length,
-            connections: recentConnections.length,
-          },
+          summary: `Project has ${connectionsCount} connection(s), ${chartsCount} chart(s), ${dashboardsCount} dashboard(s), ${queriesCount} saved quer${queriesCount === 1 ? 'y' : 'ies'}, ${datasetsCount} dataset(s), and ${componentsCount} custom component(s).`,
         };
       }
 
       case "search": {
-        if (!searchQuery) {
-          return { success: false, error: "searchQuery is required for search action" };
+        if (!searchTerm) {
+          return {
+            success: false,
+            error: "searchTerm is required for search action",
+          };
         }
 
-        const pattern = `%${searchQuery}%`;
+        // Search across all entity types
+        const [connections, charts, dashboards, queries] = await Promise.all([
+          prisma.connection.findMany({
+            where: {
+              OR: [
+                { name: { contains: searchTerm, mode: 'insensitive' } },
+                { type: { contains: searchTerm, mode: 'insensitive' } },
+              ]
+            },
+            select: { id: true, name: true, type: true }
+          }),
+          prisma.chart.findMany({
+            where: {
+              OR: [
+                { name: { contains: searchTerm, mode: 'insensitive' } },
+                { chart_type: { contains: searchTerm, mode: 'insensitive' } },
+              ]
+            },
+            select: { id: true, name: true, chart_type: true }
+          }),
+          prisma.dashboard.findMany({
+            where: { name: { contains: searchTerm, mode: 'insensitive' } },
+            select: { id: true, name: true }
+          }),
+          prisma.savedQuery.findMany({
+            where: { name: { contains: searchTerm, mode: 'insensitive' } },
+            select: { id: true, name: true }
+          }),
+        ]);
 
-        const matchingConnections = db
-          .prepare(
-            `SELECT id, name, type, 'connection' as item_type 
-             FROM connections WHERE name LIKE ? LIMIT 10`
-          )
-          .all(pattern);
+        const results = {
+          connections: connections.map(c => ({ id: c.id, name: c.name, type: c.type })),
+          charts: charts.map(c => ({ id: c.id, name: c.name, type: c.chart_type })),
+          dashboards: dashboards.map(d => ({ id: d.id, name: d.name })),
+          savedQueries: queries.map(q => ({ id: q.id, name: q.name })),
+        };
 
-        const matchingCharts = db
-          .prepare(
-            `SELECT id, name, chart_type, 'chart' as item_type 
-             FROM charts WHERE name LIKE ? OR description LIKE ? LIMIT 10`
-          )
-          .all(pattern, pattern);
-
-        const matchingDashboards = db
-          .prepare(
-            `SELECT id, name, 'dashboard' as item_type 
-             FROM dashboards WHERE name LIKE ? OR description LIKE ? LIMIT 10`
-          )
-          .all(pattern, pattern);
-
-        const matchingQueries = db
-          .prepare(
-            `SELECT id, name, 'query' as item_type 
-             FROM saved_queries WHERE name LIKE ? OR description LIKE ? LIMIT 10`
-          )
-          .all(pattern, pattern);
-
-        const allResults = [
-          ...matchingConnections,
-          ...matchingCharts,
-          ...matchingDashboards,
-          ...matchingQueries,
-        ];
+        const totalMatches =
+          results.connections.length +
+          results.charts.length +
+          results.dashboards.length +
+          results.savedQueries.length;
 
         return {
           success: true,
           action: "search",
-          searchQuery,
-          totalMatches: allResults.length,
-          results: allResults.map((item) => ({
-            id: item.id,
-            name: item.name,
-            type: item.item_type,
-            subType: item.chart_type || item.type || null,
-          })),
-          breakdown: {
-            connections: matchingConnections.length,
-            charts: matchingCharts.length,
-            dashboards: matchingDashboards.length,
-            queries: matchingQueries.length,
-          },
+          searchTerm,
+          totalMatches,
+          results,
         };
       }
 
@@ -211,66 +120,44 @@ const projectHelper = projectHelperDef.server(async ({ action, searchQuery, limi
         return {
           success: true,
           action: "help",
-          capabilities: {
-            database_operations: {
-              description: "Execute SQL queries on database connections",
-              examples: [
-                "Run this query on my postgres connection: SELECT * FROM users",
-                "Show me sales data from the products table",
-              ],
-            },
-            connection_management: {
-              description: "Create, update, delete database connections",
-              examples: [
-                "Add a new PostgreSQL connection",
-                "List all my database connections",
-                "Test if my MySQL connection is working",
-              ],
-            },
-            chart_management: {
-              description: "Create and manage data visualizations",
-              examples: [
-                "Create a bar chart showing sales by month",
-                "List all my charts",
-                "Update the chart to use a line graph instead",
-              ],
-            },
-            dashboard_management: {
-              description: "Create dashboards and organize charts",
-              examples: [
-                "Create a new sales dashboard",
-                "Add the revenue chart to my main dashboard",
-                "Make the dashboard public",
-              ],
-            },
-            query_management: {
-              description: "Save and reuse SQL queries",
-              examples: [
-                "Save this query for later use",
-                "Show me my saved queries",
-                "Execute my monthly report query",
-              ],
-            },
-            schema_explorer: {
-              description: "Explore database tables and structures",
-              examples: [
-                "What tables are in my database?",
-                "Show me the columns in the users table",
-                "Get sample data from the orders table",
-              ],
-            },
+          availableTools: {
+            database: [
+              "database_operations - Execute SQL queries",
+              "schema_explorer - Explore database structure",
+              "list_tables - Quick table listing"
+            ],
+            connections: [
+              "connection_management - Full CRUD for connections",
+              "list_connections - Quick connection listing"
+            ],
+            visualization: [
+              "chart_management - Create and manage charts"
+            ],
+            dashboards: [
+              "dashboard_management - Create and manage dashboards"
+            ],
+            queries: [
+              "query_management - Save and manage SQL queries"
+            ],
+            utility: [
+              "project_helper - This tool - project overview and search"
+           ]
           },
-          tips: [
-            "I can help you create charts automatically from natural language descriptions",
-            "Ask me to explore your database structure before writing queries",
-            "I can execute SQL and show you the results immediately",
-            "Tell me what kind of visualization you want and I'll create the chart",
+          commonTasks: [
+            "To create a chart: Use chart_management with action='create'",
+            "To view connections: Use list_connections or connection_management",
+            "To execute a query: Use database_operations",
+            "To create a dashboard: Use dashboard_management with action='create'",
+            "To search the project: Use project_helper with action='search'",
           ],
         };
       }
 
       default:
-        return { success: false, error: `Unknown action: ${action}` };
+        return {
+          success: false,
+          error: `Unknown action: ${action}`,
+        };
     }
   } catch (error) {
     console.error("Project helper error:", error);
@@ -283,4 +170,3 @@ const projectHelper = projectHelperDef.server(async ({ action, searchQuery, limi
 });
 
 export default projectHelper;
-

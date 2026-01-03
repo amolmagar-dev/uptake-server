@@ -3,7 +3,7 @@
  * Shared utilities for AI tools
  */
 
-import db from "../../config/database.js";
+import { prisma } from "../../db/client.js";
 
 /**
  * Find a connection by ID or name
@@ -11,17 +11,23 @@ import db from "../../config/database.js";
  * @param {string} connectionIdOrName - Connection ID or name
  * @returns {object|null} - Connection object or null if not found
  */
-export function findConnection(connectionIdOrName) {
+export async function findConnection(connectionIdOrName) {
   if (!connectionIdOrName) return null;
 
   // Try by ID first
-  let connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connectionIdOrName);
+  let connection = await prisma.connection.findUnique({
+    where: { id: connectionIdOrName }
+  });
 
   // If not found by ID, try by name (case-insensitive)
   if (!connection) {
-    connection = db
-      .prepare("SELECT * FROM connections WHERE LOWER(name) = LOWER(?)")
-      .get(connectionIdOrName);
+    const connections = await prisma.connection.findMany({
+      where: {
+        name: { equals: connectionIdOrName, mode: 'insensitive' }
+      },
+      take: 1
+    });
+    connection = connections[0] || null;
   }
 
   return connection;
@@ -31,8 +37,10 @@ export function findConnection(connectionIdOrName) {
  * Get list of available connections for error messages
  * @returns {Array} - Array of connection summaries
  */
-export function getAvailableConnectionsList() {
-  const connections = db.prepare("SELECT id, name, type FROM connections").all();
+export async function getAvailableConnectionsList() {
+  const connections = await prisma.connection.findMany({
+    select: { id: true, name: true, type: true }
+  });
   return connections.map((c) => ({
     id: c.id,
     name: c.name,
@@ -46,13 +54,21 @@ export function getAvailableConnectionsList() {
  * @param {string} chartIdOrName - Chart ID or name
  * @returns {object|null} - Chart object or null if not found
  */
-export function findChart(chartIdOrName) {
+export async function findChart(chartIdOrName) {
   if (!chartIdOrName) return null;
 
-  let chart = db.prepare("SELECT * FROM charts WHERE id = ?").get(chartIdOrName);
+  let chart = await prisma.chart.findUnique({
+    where: { id: chartIdOrName }
+  });
 
   if (!chart) {
-    chart = db.prepare("SELECT * FROM charts WHERE LOWER(name) = LOWER(?)").get(chartIdOrName);
+    const charts = await prisma.chart.findMany({
+      where: {
+        name: { equals: chartIdOrName, mode: 'insensitive' }
+      },
+      take: 1
+    });
+    chart = charts[0] || null;
   }
 
   return chart;
@@ -63,15 +79,21 @@ export function findChart(chartIdOrName) {
  * @param {string} dashboardIdOrName - Dashboard ID or name
  * @returns {object|null} - Dashboard object or null if not found
  */
-export function findDashboard(dashboardIdOrName) {
+export async function findDashboard(dashboardIdOrName) {
   if (!dashboardIdOrName) return null;
 
-  let dashboard = db.prepare("SELECT * FROM dashboards WHERE id = ?").get(dashboardIdOrName);
+  let dashboard = await prisma.dashboard.findUnique({
+    where: { id: dashboardIdOrName }
+  });
 
   if (!dashboard) {
-    dashboard = db
-      .prepare("SELECT * FROM dashboards WHERE LOWER(name) = LOWER(?)")
-      .get(dashboardIdOrName);
+    const dashboards = await prisma.dashboard.findMany({
+      where: {
+        name: { equals: dashboardIdOrName, mode: 'insensitive' }
+      },
+      take: 1
+    });
+    dashboard = dashboards[0] || null;
   }
 
   return dashboard;
@@ -82,15 +104,22 @@ export function findDashboard(dashboardIdOrName) {
  * @param {string} queryIdOrName - Query ID or name
  * @returns {object|null} - Query object or null if not found
  */
-export function findSavedQuery(queryIdOrName) {
+export async function findSavedQuery(queryIdOrName) {
   if (!queryIdOrName) return null;
 
-  let query = db.prepare("SELECT * FROM saved_queries WHERE id = ?").get(queryIdOrName);
+  let query = await prisma.savedQuery.findUnique({
+    where: { id: queryIdOrName }
+  });
 
   if (!query) {
-    query = db.prepare("SELECT * FROM saved_queries WHERE LOWER(name) = LOWER(?)").get(queryIdOrName);
+    const queries = await prisma.savedQuery.findMany({
+      where: {
+        name: { equals: queryIdOrName, mode: 'insensitive' }
+      },
+      take: 1
+    });
+    query = queries[0] || null;
   }
 
   return query;
 }
-

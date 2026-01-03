@@ -1,9 +1,6 @@
 import { Router, Request, Response } from "express";
-import bcrypt from "bcryptjs";
-import { v4 as uuidv4 } from "uuid";
-import db from "../config/database.js";
 import { generateToken, authenticateToken } from "../middleware/auth.js";
-import { User, UserProfile } from "../types/database.js";
+import { userRepository } from "../db/index.js";
 
 const router = Router();
 
@@ -13,18 +10,18 @@ router.post("/login", async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      res.status(400).json({ error: " and password are required" });
+      res.status(400).json({ error: "Email and password are required" });
       return;
     }
 
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as User | undefined;
+    const user = await userRepository.findByEmail(email);
 
     if (!user) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
 
-    const validPassword = await bcrypt.compare(password, user.password);
+    const validPassword = await userRepository.verifyPassword(user, password);
     if (!validPassword) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
@@ -57,31 +54,28 @@ router.post("/register", async (req: Request, res: Response) => {
       return;
     }
 
-    const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
-    if (existingUser) {
+    const existsAlready = await userRepository.existsByEmail(email);
+    if (existsAlready) {
       res.status(409).json({ error: "Email already registered" });
       return;
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const userId = uuidv4();
+    const user = await userRepository.create({
+      email,
+      password,
+      name: name || email.split("@")[0]!,
+      role: "viewer",
+    });
 
-    db.prepare(
-      `
-      INSERT INTO users (id, email, password, name, role)
-      VALUES (?, ?, ?, ?, ?)
-    `
-    ).run(userId, email, hashedPassword, name || email.split("@")[0]!, "viewer");
-
-    const token = generateToken(userId);
+    const token = generateToken(user.id);
 
     res.status(201).json({
       token,
       user: {
-        id: userId,
-        email,
-        name: name || email.split("@")[0]!,
-        role: "viewer",
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
       },
     });
   } catch (error) {
@@ -107,26 +101,26 @@ router.put("/profile", authenticateToken, async (req: Request, res: Response) =>
         return;
       }
 
-      const user = db.prepare("SELECT password FROM users WHERE id = ?").get(userId) as Pick<User, 'password'>;
-      const validPassword = await bcrypt.compare(currentPassword, user.password);
+      const user = await userRepository.findById(userId);
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
 
+      const validPassword = await userRepository.verifyPassword(user, currentPassword);
       if (!validPassword) {
         res.status(401).json({ error: "Current password is incorrect" });
         return;
       }
 
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      db.prepare("UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
-        hashedPassword,
-        userId
-      );
+      await userRepository.update(userId, { password: newPassword });
     }
 
     if (name) {
-      db.prepare("UPDATE users SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(name, userId);
+      await userRepository.update(userId, { name });
     }
 
-    const updatedUser = db.prepare("SELECT id, email, name, role FROM users WHERE id = ?").get(userId) as UserProfile;
+    const updatedUser = await userRepository.findProfileById(userId);
     res.json({ user: updatedUser });
   } catch (error) {
     console.error("Profile update error:", error);

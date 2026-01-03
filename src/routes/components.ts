@@ -1,37 +1,41 @@
 // @ts-nocheck
 import { Router } from "express";
-import { v4 as uuidv4 } from "uuid";
-import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
+import { customComponentRepository, datasetRepository, connectionRepository } from "../db/index.js";
+import { prisma } from "../db/client.js";
 import { executeQuery } from "../services/databaseConnector.js";
+import { executeApiRequest } from "../services/apiConnector.js";
+import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
 const router = Router();
 
 router.use(authenticateToken);
 
 // Get all custom components
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const components = db
-      .prepare(
-        `
-      SELECT cc.*, 
-             c.name as connection_name, c.type as connection_type,
-             d.name as dataset_name, d.dataset_type, d.source_type,
-             u.name as created_by_name
-      FROM custom_components cc
-      LEFT JOIN connections c ON cc.connection_id = c.id
-      LEFT JOIN datasets d ON cc.dataset_id = d.id
-      LEFT JOIN users u ON cc.created_by = u.id
-      ORDER BY cc.updated_at DESC
-    `
-      )
-      .all();
+    const components = await prisma.customComponent.findMany({
+      include: {
+        connection: { select: { name: true, type: true } },
+        dataset: { select: { name: true, dataset_type: true, source_type: true } },
+        creator: { select: { name: true } },
+      },
+      orderBy: { updated_at: "desc" },
+    });
 
-    // Parse config JSON
+    // Parse config JSON and format response
     const parsedComponents = components.map((comp) => ({
       ...comp,
+      connection_name: comp.connection?.name,
+      connection_type: comp.connection?.type,
+      dataset_name: comp.dataset?.name,
+      dataset_type: comp.dataset?.dataset_type,
+      source_type: comp.dataset?.source_type,
+      created_by_name: comp.creator?.name,
       config: comp.config ? JSON.parse(comp.config) : {},
+      connection: undefined,
+      dataset: undefined,
+      creator: undefined,
     }));
 
     res.json({ components: parsedComponents });
@@ -42,21 +46,15 @@ router.get("/", (req, res) => {
 });
 
 // Get single component
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const component = db
-      .prepare(
-        `
-      SELECT cc.*, 
-             c.name as connection_name, c.type as connection_type,
-             d.name as dataset_name, d.dataset_type, d.source_type
-      FROM custom_components cc
-      LEFT JOIN connections c ON cc.connection_id = c.id
-      LEFT JOIN datasets d ON cc.dataset_id = d.id
-      WHERE cc.id = ?
-    `
-      )
-      .get(req.params.id);
+    const component = await prisma.customComponent.findUnique({
+      where: { id: req.params.id },
+      include: {
+        connection: { select: { name: true, type: true } },
+        dataset: { select: { name: true, dataset_type: true, source_type: true } },
+      },
+    });
 
     if (!component) {
       return res.status(404).json({ error: "Component not found" });
@@ -65,7 +63,14 @@ router.get("/:id", (req, res) => {
     res.json({
       component: {
         ...component,
+        connection_name: component.connection?.name,
+        connection_type: component.connection?.type,
+        dataset_name: component.dataset?.name,
+        dataset_type: component.dataset?.dataset_type,
+        source_type: component.dataset?.source_type,
         config: component.config ? JSON.parse(component.config) : {},
+        connection: undefined,
+        dataset: undefined,
       },
     });
   } catch (error) {
@@ -75,7 +80,7 @@ router.get("/:id", (req, res) => {
 });
 
 // Create new component
-router.post("/", requireRole("admin", "editor"), (req, res) => {
+router.post("/", requireRole("admin", "editor"), async (req, res) => {
   try {
     const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
 
@@ -85,44 +90,36 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 
     // Validate dataset if provided
     if (dataset_id) {
-      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
-      if (!dataset) {
+      const datasetExists = await datasetRepository.exists(dataset_id);
+      if (!datasetExists) {
         return res.status(404).json({ error: "Dataset not found" });
       }
     }
 
     // Legacy: Validate connection if provided (backward compatibility)
     if (connection_id && !dataset_id) {
-      const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
-      if (!connection) {
+      const connectionExists = await connectionRepository.exists(connection_id);
+      if (!connectionExists) {
         return res.status(404).json({ error: "Connection not found" });
       }
     }
 
-    const componentId = uuidv4();
-
-    db.prepare(
-      `
-      INSERT INTO custom_components (id, name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    ).run(
-      componentId,
+    const component = await customComponentRepository.create({
       name,
-      description || null,
+      description,
       html_content,
-      css_content || null,
-      js_content || null,
-      config ? JSON.stringify(config) : null,
-      dataset_id || null,
-      connection_id || null,
-      sql_query || null,
-      req.user.id
-    );
+      css_content,
+      js_content,
+      config: config ? JSON.stringify(config) : null,
+      dataset_id,
+      connection_id,
+      sql_query,
+      created_by: req.user.id,
+    });
 
     res.status(201).json({
       component: {
-        id: componentId,
+        id: component.id,
         name,
         description,
         html_content,
@@ -142,43 +139,35 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 });
 
 // Update component
-router.put("/:id", requireRole("admin", "editor"), (req, res) => {
+router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
     const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
     const componentId = req.params.id;
 
-    const existing = db.prepare("SELECT * FROM custom_components WHERE id = ?").get(componentId);
+    const existing = await customComponentRepository.findById(componentId);
     if (!existing) {
       return res.status(404).json({ error: "Component not found" });
     }
 
     // Validate dataset if provided
     if (dataset_id) {
-      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
-      if (!dataset) {
+      const datasetExists = await datasetRepository.exists(dataset_id);
+      if (!datasetExists) {
         return res.status(404).json({ error: "Dataset not found" });
       }
     }
 
-    db.prepare(
-      `
-      UPDATE custom_components 
-      SET name = ?, description = ?, html_content = ?, css_content = ?, js_content = ?,
-          config = ?, dataset_id = ?, connection_id = ?, sql_query = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(
-      name || existing.name,
-      description !== undefined ? description : existing.description,
-      html_content || existing.html_content,
-      css_content !== undefined ? css_content : existing.css_content,
-      js_content !== undefined ? js_content : existing.js_content,
-      config ? JSON.stringify(config) : existing.config,
-      dataset_id !== undefined ? dataset_id : existing.dataset_id,
-      connection_id !== undefined ? connection_id : existing.connection_id,
-      sql_query !== undefined ? sql_query : existing.sql_query,
-      componentId
-    );
+    await customComponentRepository.update(componentId, {
+      name: name || existing.name,
+      description: description !== undefined ? description : existing.description,
+      html_content: html_content || existing.html_content,
+      css_content: css_content !== undefined ? css_content : existing.css_content,
+      js_content: js_content !== undefined ? js_content : existing.js_content,
+      config: config ? JSON.stringify(config) : existing.config,
+      dataset_id: dataset_id !== undefined ? dataset_id : existing.dataset_id,
+      connection_id: connection_id !== undefined ? connection_id : existing.connection_id,
+      sql_query: sql_query !== undefined ? sql_query : existing.sql_query,
+    });
 
     res.json({ message: "Component updated successfully" });
   } catch (error) {
@@ -188,17 +177,16 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
 });
 
 // Delete component
-router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
+router.delete("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
     const componentId = req.params.id;
 
-    const existing = db.prepare("SELECT id FROM custom_components WHERE id = ?").get(componentId);
-    if (!existing) {
+    const exists = await customComponentRepository.exists(componentId);
+    if (!exists) {
       return res.status(404).json({ error: "Component not found" });
     }
 
-    db.prepare("DELETE FROM custom_components WHERE id = ?").run(componentId);
-
+    await customComponentRepository.delete(componentId);
     res.json({ message: "Component deleted successfully" });
   } catch (error) {
     console.error("Delete component error:", error);
@@ -209,22 +197,15 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
 // Get component data (execute the component's query if it has one)
 router.get("/:id/data", async (req, res) => {
   try {
-    const component = db
-      .prepare(
-        `
-      SELECT cc.*, 
-             d.source_type, d.dataset_type, d.table_name, d.table_schema, d.sql_query as dataset_sql_query, d.connection_id as dataset_connection_id,
-             c.host, c.port, c.database_name, c.username, c.password, c.ssl, c.type as db_type,
-             dc.host as dc_host, dc.port as dc_port, dc.database_name as dc_database_name, 
-             dc.username as dc_username, dc.password as dc_password, dc.ssl as dc_ssl, dc.type as dc_db_type
-      FROM custom_components cc
-      LEFT JOIN datasets d ON cc.dataset_id = d.id
-      LEFT JOIN connections c ON d.connection_id = c.id
-      LEFT JOIN connections dc ON cc.connection_id = dc.id
-      WHERE cc.id = ?
-    `
-      )
-      .get(req.params.id);
+    const component = await prisma.customComponent.findUnique({
+      where: { id: req.params.id },
+      include: {
+        dataset: {
+          include: { connection: true },
+        },
+        connection: true,
+      },
+    });
 
     if (!component) {
       return res.status(404).json({ error: "Component not found" });
@@ -232,75 +213,86 @@ router.get("/:id/data", async (req, res) => {
 
     let sqlQuery;
     let connection;
+    let result;
 
     // Check if component uses a dataset
-    if (component.dataset_id) {
-      if (component.source_type !== 'sql') {
+    if (component.dataset_id && component.dataset) {
+      const dataset = component.dataset;
+      connection = dataset.connection;
+
+      if (!connection) {
         return res.json({
           component: {
             ...component,
             config: component.config ? JSON.parse(component.config) : {},
           },
           data: null,
-          error: `Unsupported source type: ${component.source_type}`,
+          error: "No connection found for dataset",
         });
       }
 
-      // Build query based on dataset type
-      if (component.dataset_type === 'physical') {
-        const schemaPrefix = component.table_schema ? `"${component.table_schema}".` : '';
-        sqlQuery = `SELECT * FROM ${schemaPrefix}"${component.table_name}"`;
-      } else if (component.dataset_type === 'virtual') {
-        sqlQuery = component.dataset_sql_query;
-      }
+      if (dataset.source_type === 'sql') {
+        // Build query based on dataset type
+        if (dataset.dataset_type === 'physical') {
+          const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+          sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+        } else if (dataset.dataset_type === 'virtual') {
+          sqlQuery = dataset.sql_query;
+        }
 
-      connection = {
-        id: component.dataset_connection_id,
-        type: component.db_type,
-        host: component.host,
-        port: component.port,
-        database_name: component.database_name,
-        username: component.username,
-        password: component.password,
-        ssl: component.ssl,
-      };
+        if (!sqlQuery) {
+          return res.json({
+            component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
+            data: null,
+            error: "No query available",
+          });
+        }
+
+        result = await executeQuery(connection, sqlQuery);
+      } else if (dataset.source_type === 'api') {
+        result = await executeApiRequest(connection);
+      } else if (dataset.source_type === 'googlesheet') {
+        result = await fetchGoogleSheet(connection);
+      } else {
+        return res.json({
+          component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
+          data: null,
+          error: `Unsupported source type: ${dataset.source_type}`,
+        });
+      }
     } else if (component.connection_id && component.sql_query) {
       // Legacy: component uses connection directly
       sqlQuery = component.sql_query;
-      connection = {
-        id: component.connection_id,
-        type: component.dc_db_type,
-        host: component.dc_host,
-        port: component.dc_port,
-        database_name: component.dc_database_name,
-        username: component.dc_username,
-        password: component.dc_password,
-        ssl: component.dc_ssl,
-      };
-    }
+      connection = component.connection;
 
-    // If no data source, return component without data
-    if (!sqlQuery || !connection || !connection.host) {
+      if (!connection) {
+        return res.json({
+          component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
+          data: null,
+          error: "No connection found",
+        });
+      }
+
+      result = await executeQuery(connection, sqlQuery);
+    } else {
+      // No data source, return component without data
       return res.json({
-        component: {
-          ...component,
-          config: component.config ? JSON.parse(component.config) : {},
-        },
+        component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
         data: null,
       });
     }
-
-    const result = await executeQuery(connection, sqlQuery);
 
     res.json({
       component: {
         ...component,
         config: component.config ? JSON.parse(component.config) : {},
+        dataset: undefined,
+        connection: undefined,
       },
-      data: result.rows,
-      fields: result.fields,
-      rowCount: result.rowCount,
-      executionTime: result.executionTime,
+      data: result?.rows || [],
+      fields: result?.fields,
+      rowCount: result?.rowCount,
+      executionTime: result?.executionTime,
     });
   } catch (error) {
     console.error("Get component data error:", error);

@@ -1,12 +1,12 @@
 import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
-import db from "../config/database.js";
+import { userRepository } from "../db/index.js";
 import { JWTPayload } from "../types/auth.js";
 import { UserProfile } from "../types/database.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-jwt-key";
 
-export function authenticateToken(req: Request, res: Response, next: NextFunction): void {
+export async function authenticateToken(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1]; // Bearer TOKEN
 
@@ -17,14 +17,14 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JWTPayload;
-    const user = db.prepare("SELECT id, email, name, role FROM users WHERE id = ?").get(decoded.userId) as UserProfile | undefined;
+    const user = await userRepository.findProfileById(decoded.userId);
 
     if (!user) {
       res.status(401).json({ error: "User not found" });
       return;
     }
 
-    req.user = user;
+    req.user = user as unknown as UserProfile;
     next();
   } catch (err) {
     res.status(403).json({ error: "Invalid or expired token" });

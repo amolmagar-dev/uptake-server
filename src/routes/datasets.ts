@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { Router } from "express";
-import { v4 as uuidv4 } from "uuid";
-import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
+import { datasetRepository, connectionRepository, chartRepository } from "../db/index.js";
+import { prisma } from "../db/client.js";
 import { executeQuery, getTableList, getTableSchema } from "../services/databaseConnector.js";
 import { executeApiRequest } from "../services/apiConnector.js";
 import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
@@ -12,26 +12,26 @@ const router = Router();
 router.use(authenticateToken);
 
 // Get all datasets
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const datasets = db
-      .prepare(
-        `
-      SELECT d.*, c.name as connection_name, c.type as connection_type,
-             u.name as created_by_name
-      FROM datasets d
-      LEFT JOIN connections c ON d.connection_id = c.id
-      LEFT JOIN users u ON d.created_by = u.id
-      ORDER BY d.updated_at DESC
-    `
-      )
-      .all();
+    const datasets = await prisma.dataset.findMany({
+      include: {
+        connection: { select: { name: true, type: true } },
+        creator: { select: { name: true } },
+      },
+      orderBy: { updated_at: "desc" },
+    });
 
-    // Parse JSON fields
+    // Parse JSON fields and format response
     const parsedDatasets = datasets.map((dataset) => ({
       ...dataset,
+      connection_name: dataset.connection?.name,
+      connection_type: dataset.connection?.type,
+      created_by_name: dataset.creator?.name,
       columns: dataset.columns ? JSON.parse(dataset.columns) : null,
       source_config: dataset.source_config ? JSON.parse(dataset.source_config) : null,
+      connection: undefined,
+      creator: undefined,
     }));
 
     res.json({ datasets: parsedDatasets });
@@ -42,18 +42,14 @@ router.get("/", (req, res) => {
 });
 
 // Get single dataset
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const dataset = db
-      .prepare(
-        `
-      SELECT d.*, c.name as connection_name, c.type as connection_type
-      FROM datasets d
-      LEFT JOIN connections c ON d.connection_id = c.id
-      WHERE d.id = ?
-    `
-      )
-      .get(req.params.id);
+    const dataset = await prisma.dataset.findUnique({
+      where: { id: req.params.id },
+      include: {
+        connection: { select: { name: true, type: true } },
+      },
+    });
 
     if (!dataset) {
       return res.status(404).json({ error: "Dataset not found" });
@@ -62,8 +58,11 @@ router.get("/:id", (req, res) => {
     res.json({
       dataset: {
         ...dataset,
+        connection_name: dataset.connection?.name,
+        connection_type: dataset.connection?.type,
         columns: dataset.columns ? JSON.parse(dataset.columns) : null,
         source_config: dataset.source_config ? JSON.parse(dataset.source_config) : null,
+        connection: undefined,
       },
     });
   } catch (error) {
@@ -97,8 +96,8 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
         return res.status(400).json({ error: "Connection ID is required for SQL datasets" });
       }
 
-      const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
-      if (!connection) {
+      const connectionExists = await connectionRepository.exists(connection_id);
+      if (!connectionExists) {
         return res.status(404).json({ error: "Connection not found" });
       }
 
@@ -111,13 +110,11 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
       }
     }
 
-    const datasetId = uuidv4();
-
     // Fetch columns based on source type
     let columns = null;
     if (connection_id) {
       try {
-        const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(connection_id);
+        const connection = await connectionRepository.findById(connection_id);
         
         if (source_type === 'sql') {
           if (dataset_type === 'physical' && table_name) {
@@ -139,29 +136,23 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
       }
     }
 
-    db.prepare(
-      `
-      INSERT INTO datasets (id, name, description, source_type, dataset_type, connection_id, table_name, table_schema, sql_query, source_config, columns, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    ).run(
-      datasetId,
+    const dataset = await datasetRepository.create({
       name,
-      description || null,
+      description,
       source_type,
       dataset_type,
-      connection_id || null,
-      table_name || null,
-      table_schema || null,
-      sql_query || null,
-      source_config ? JSON.stringify(source_config) : null,
-      columns ? JSON.stringify(columns) : null,
-      req.user.id
-    );
+      connection_id,
+      table_name,
+      table_schema,
+      sql_query,
+      source_config: source_config ? JSON.stringify(source_config) : null,
+      columns: columns ? JSON.stringify(columns) : null,
+      created_by: req.user.id,
+    });
 
     res.status(201).json({
       dataset: {
-        id: datasetId,
+        id: dataset.id,
         name,
         description,
         source_type,
@@ -197,7 +188,7 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
     } = req.body;
     const datasetId = req.params.id;
 
-    const existing = db.prepare("SELECT * FROM datasets WHERE id = ?").get(datasetId);
+    const existing = await datasetRepository.findById(datasetId);
     if (!existing) {
       return res.status(404).json({ error: "Dataset not found" });
     }
@@ -217,7 +208,7 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
 
       if (tableChanged || queryChanged) {
         try {
-          const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(newConnectionId);
+          const connection = await connectionRepository.findById(newConnectionId);
           if (newDatasetType === 'physical' && newTableName) {
             const schemaColumns = await getTableSchema(connection, newTableName, newTableSchema);
             columns = JSON.stringify(schemaColumns);
@@ -231,27 +222,18 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
       }
     }
 
-    db.prepare(
-      `
-      UPDATE datasets 
-      SET name = ?, description = ?, source_type = ?, dataset_type = ?, 
-          connection_id = ?, table_name = ?, table_schema = ?, sql_query = ?,
-          source_config = ?, columns = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(
-      name || existing.name,
-      description !== undefined ? description : existing.description,
-      newSourceType,
-      newDatasetType,
-      newConnectionId,
-      newTableName,
-      newTableSchema,
-      newSqlQuery,
-      source_config ? JSON.stringify(source_config) : existing.source_config,
+    await datasetRepository.update(datasetId, {
+      name: name || existing.name,
+      description: description !== undefined ? description : existing.description,
+      source_type: newSourceType,
+      dataset_type: newDatasetType,
+      connection_id: newConnectionId,
+      table_name: newTableName,
+      table_schema: newTableSchema,
+      sql_query: newSqlQuery,
+      source_config: source_config ? JSON.stringify(source_config) : existing.source_config,
       columns,
-      datasetId
-    );
+    });
 
     res.json({ message: "Dataset updated successfully" });
   } catch (error) {
@@ -261,25 +243,24 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
 });
 
 // Delete dataset
-router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
+router.delete("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
     const datasetId = req.params.id;
 
-    const existing = db.prepare("SELECT id FROM datasets WHERE id = ?").get(datasetId);
-    if (!existing) {
+    const exists = await datasetRepository.exists(datasetId);
+    if (!exists) {
       return res.status(404).json({ error: "Dataset not found" });
     }
 
     // Check if any charts use this dataset
-    const chartsUsingDataset = db.prepare("SELECT COUNT(*) as count FROM charts WHERE dataset_id = ?").get(datasetId);
-    if (chartsUsingDataset && chartsUsingDataset.count > 0) {
+    const chartsCount = await datasetRepository.countChartsUsing(datasetId);
+    if (chartsCount > 0) {
       return res.status(400).json({ 
-        error: `Cannot delete dataset: ${chartsUsingDataset.count} chart(s) are using this dataset` 
+        error: `Cannot delete dataset: ${chartsCount} chart(s) are using this dataset` 
       });
     }
 
-    db.prepare("DELETE FROM datasets WHERE id = ?").run(datasetId);
-
+    await datasetRepository.delete(datasetId);
     res.json({ message: "Dataset deleted successfully" });
   } catch (error) {
     console.error("Delete dataset error:", error);
@@ -290,7 +271,7 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
 // Preview dataset data (first 100 rows)
 router.get("/:id/preview", async (req, res) => {
   try {
-    const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(req.params.id);
+    const dataset = await datasetRepository.findById(req.params.id);
 
     if (!dataset) {
       return res.status(404).json({ error: "Dataset not found" });
@@ -299,7 +280,7 @@ router.get("/:id/preview", async (req, res) => {
     let result;
 
     if (dataset.source_type === 'sql') {
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
       }
@@ -314,21 +295,19 @@ router.get("/:id/preview", async (req, res) => {
 
       result = await executeQuery(connection, sqlQuery);
     } else if (dataset.source_type === 'api') {
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "API connection not found" });
       }
       result = await executeApiRequest(connection);
-      // Limit to 100 rows for preview
       result.rows = result.rows.slice(0, 100);
       result.rowCount = result.rows.length;
     } else if (dataset.source_type === 'googlesheet') {
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Google Sheets connection not found" });
       }
       result = await fetchGoogleSheet(connection);
-      // Limit to 100 rows for preview
       result.rows = result.rows.slice(0, 100);
       result.rowCount = result.rows.length;
     } else {
@@ -350,7 +329,7 @@ router.get("/:id/preview", async (req, res) => {
 // Get dataset columns
 router.get("/:id/columns", async (req, res) => {
   try {
-    const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(req.params.id);
+    const dataset = await datasetRepository.findById(req.params.id);
 
     if (!dataset) {
       return res.status(404).json({ error: "Dataset not found" });
@@ -365,7 +344,7 @@ router.get("/:id/columns", async (req, res) => {
 
     // Fetch columns dynamically based on source type
     if (dataset.source_type === 'sql' && dataset.connection_id) {
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
       }
@@ -377,8 +356,7 @@ router.get("/:id/columns", async (req, res) => {
         columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
       }
     } else if (dataset.source_type === 'api' && dataset.connection_id) {
-      // Fetch sample data from API to get columns
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (connection) {
         try {
           const result = await executeApiRequest(connection);
@@ -388,8 +366,7 @@ router.get("/:id/columns", async (req, res) => {
         }
       }
     } else if (dataset.source_type === 'googlesheet' && dataset.connection_id) {
-      // Fetch sample data from Google Sheets to get columns
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (connection) {
         try {
           const result = await fetchGoogleSheet(connection);
@@ -402,7 +379,7 @@ router.get("/:id/columns", async (req, res) => {
 
     // Cache the columns if we got any
     if (columns.length > 0) {
-      db.prepare("UPDATE datasets SET columns = ? WHERE id = ?").run(JSON.stringify(columns), dataset.id);
+      await datasetRepository.update(dataset.id, { columns: JSON.stringify(columns) });
     }
 
     return res.json({ columns });
@@ -415,7 +392,7 @@ router.get("/:id/columns", async (req, res) => {
 // Refresh dataset columns (re-fetch from source)
 router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, res) => {
   try {
-    const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(req.params.id);
+    const dataset = await datasetRepository.findById(req.params.id);
 
     if (!dataset) {
       return res.status(404).json({ error: "Dataset not found" });
@@ -425,7 +402,7 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
       return res.status(400).json({ error: "Dataset has no connection" });
     }
 
-    const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+    const connection = await connectionRepository.findById(dataset.connection_id);
     if (!connection) {
       return res.status(404).json({ error: "Connection not found" });
     }
@@ -448,8 +425,7 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
     }
 
     if (columns.length > 0) {
-      db.prepare("UPDATE datasets SET columns = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .run(JSON.stringify(columns), dataset.id);
+      await datasetRepository.update(dataset.id, { columns: JSON.stringify(columns) });
     }
 
     res.json({ columns, message: "Columns refreshed successfully" });

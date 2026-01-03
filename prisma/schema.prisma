@@ -1,0 +1,190 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// User authentication and profiles
+model User {
+  id         String   @id @default(uuid())
+  email      String   @unique
+  password   String
+  name       String?
+  role       String   @default("viewer") // admin, editor, viewer
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  // Relations
+  connections      Connection[]
+  savedQueries     SavedQuery[]
+  datasets         Dataset[]
+  charts           Chart[]
+  dashboards       Dashboard[]
+  customComponents CustomComponent[]
+
+  @@map("users")
+}
+
+// Database connection configurations
+model Connection {
+  id            String   @id @default(uuid())
+  name          String
+  type          String // mysql, postgresql, sqlite, api, googlesheets
+  host          String?
+  port          Int?
+  database_name String?
+  username      String?
+  password      String?
+  ssl           Int      @default(0)
+  config        String?  // JSON string for API and Google Sheets configs
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relations
+  creator          User?             @relation(fields: [created_by], references: [id])
+  savedQueries     SavedQuery[]
+  datasets         Dataset[]
+  charts           Chart[]
+  customComponents CustomComponent[]
+
+  @@map("connections")
+}
+
+// Saved SQL queries
+model SavedQuery {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  sql_query     String
+  connection_id String
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relations
+  connection Connection @relation(fields: [connection_id], references: [id])
+  creator    User?      @relation(fields: [created_by], references: [id])
+  charts     Chart[]
+
+  @@map("saved_queries")
+}
+
+// Data source abstractions
+model Dataset {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  source_type   String   @default("sql") // sql, api, googlesheets
+  dataset_type  String   @default("physical") // physical, virtual
+  connection_id String?
+  table_name    String?
+  table_schema  String   @default("public")
+  sql_query     String?
+  source_config String?  // JSON string
+  columns       String?  // JSON string
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relations
+  connection       Connection?       @relation(fields: [connection_id], references: [id])
+  creator          User?             @relation(fields: [created_by], references: [id])
+  charts           Chart[]
+  customComponents CustomComponent[]
+
+  @@map("datasets")
+}
+
+// Chart configurations
+model Chart {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  chart_type    String
+  config        String   // JSON string
+  query_id      String?
+  sql_query     String?
+  connection_id String?
+  dataset_id    String?
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relations
+  savedQuery      SavedQuery?      @relation(fields: [query_id], references: [id])
+  connection      Connection?      @relation(fields: [connection_id], references: [id])
+  dataset         Dataset?         @relation(fields: [dataset_id], references: [id])
+  creator         User?            @relation(fields: [created_by], references: [id])
+  dashboardCharts DashboardChart[]
+
+  @@map("charts")
+}
+
+// Dashboard layouts and metadata
+model Dashboard {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  layout      String   // JSON string
+  filters     String   @default("[]") // JSON string
+  is_public   Int      @default(0)
+  created_by  String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  // Relations
+  creator         User?            @relation(fields: [created_by], references: [id])
+  dashboardCharts DashboardChart[]
+
+  @@map("dashboards")
+}
+
+// Junction table for dashboard-chart relationships
+model DashboardChart {
+  id           String  @id @default(uuid())
+  dashboard_id String
+  chart_id     String?
+  component_id String?
+  position_x   Int     @default(0)
+  position_y   Int     @default(0)
+  width        Int     @default(6)
+  height       Int     @default(4)
+
+  // Relations
+  dashboard Dashboard        @relation(fields: [dashboard_id], references: [id], onDelete: Cascade)
+  chart     Chart?           @relation(fields: [chart_id], references: [id], onDelete: Cascade)
+  component CustomComponent? @relation(fields: [component_id], references: [id], onDelete: Cascade)
+
+  @@map("dashboard_charts")
+}
+
+// Custom HTML/CSS/JS components
+model CustomComponent {
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  html_content  String
+  css_content   String?
+  js_content    String?
+  config        String?  // JSON string
+  connection_id String?
+  sql_query     String?
+  dataset_id    String?
+  created_by    String?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  // Relations
+  connection      Connection?      @relation(fields: [connection_id], references: [id])
+  dataset         Dataset?         @relation(fields: [dataset_id], references: [id])
+  creator         User?            @relation(fields: [created_by], references: [id])
+  dashboardCharts DashboardChart[]
+
+  @@map("custom_components")
+}

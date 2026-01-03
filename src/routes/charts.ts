@@ -1,8 +1,8 @@
 // @ts-nocheck
 import { Router } from "express";
-import { v4 as uuidv4 } from "uuid";
-import db from "../config/database.js";
 import { authenticateToken, requireRole } from "../middleware/auth.js";
+import { chartRepository, datasetRepository, connectionRepository, savedQueryRepository } from "../db/index.js";
+import { prisma } from "../db/client.js";
 import { executeQuery } from "../services/databaseConnector.js";
 import { executeApiRequest } from "../services/apiConnector.js";
 import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
@@ -12,28 +12,31 @@ const router = Router();
 router.use(authenticateToken);
 
 // Get all charts
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const charts = db
-      .prepare(
-        `
-      SELECT ch.*, 
-             c.name as connection_name, c.type as connection_type,
-             d.name as dataset_name, d.dataset_type, d.source_type,
-             u.name as created_by_name
-      FROM charts ch
-      LEFT JOIN connections c ON ch.connection_id = c.id
-      LEFT JOIN datasets d ON ch.dataset_id = d.id
-      LEFT JOIN users u ON ch.created_by = u.id
-      ORDER BY ch.updated_at DESC
-    `
-      )
-      .all();
+    const charts = await prisma.chart.findMany({
+      include: {
+        connection: { select: { name: true, type: true } },
+        dataset: { select: { name: true, dataset_type: true, source_type: true } },
+        creator: { select: { name: true } },
+      },
+      orderBy: { updated_at: "desc" },
+    });
 
-    // Parse config JSON
+    // Parse config JSON and format response
     const parsedCharts = charts.map((chart) => ({
       ...chart,
+      connection_name: chart.connection?.name,
+      connection_type: chart.connection?.type,
+      dataset_name: chart.dataset?.name,
+      dataset_type: chart.dataset?.dataset_type,
+      source_type: chart.dataset?.source_type,
+      created_by_name: chart.creator?.name,
       config: JSON.parse(chart.config),
+      // Remove relation objects
+      connection: undefined,
+      dataset: undefined,
+      creator: undefined,
     }));
 
     res.json({ charts: parsedCharts });
@@ -44,21 +47,15 @@ router.get("/", (req, res) => {
 });
 
 // Get single chart
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const chart = db
-      .prepare(
-        `
-      SELECT ch.*, 
-             c.name as connection_name, c.type as connection_type,
-             d.name as dataset_name, d.dataset_type, d.source_type
-      FROM charts ch
-      LEFT JOIN connections c ON ch.connection_id = c.id
-      LEFT JOIN datasets d ON ch.dataset_id = d.id
-      WHERE ch.id = ?
-    `
-      )
-      .get(req.params.id);
+    const chart = await prisma.chart.findUnique({
+      where: { id: req.params.id },
+      include: {
+        connection: { select: { name: true, type: true } },
+        dataset: { select: { name: true, dataset_type: true, source_type: true } },
+      },
+    });
 
     if (!chart) {
       return res.status(404).json({ error: "Chart not found" });
@@ -67,7 +64,14 @@ router.get("/:id", (req, res) => {
     res.json({
       chart: {
         ...chart,
+        connection_name: chart.connection?.name,
+        connection_type: chart.connection?.type,
+        dataset_name: chart.dataset?.name,
+        dataset_type: chart.dataset?.dataset_type,
+        source_type: chart.dataset?.source_type,
         config: JSON.parse(chart.config),
+        connection: undefined,
+        dataset: undefined,
       },
     });
   } catch (error) {
@@ -77,7 +81,7 @@ router.get("/:id", (req, res) => {
 });
 
 // Create new chart
-router.post("/", requireRole("admin", "editor"), (req, res) => {
+router.post("/", requireRole("admin", "editor"), async (req, res) => {
   try {
     const { name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id } = req.body;
 
@@ -92,16 +96,16 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 
     // If using dataset, validate it exists
     if (dataset_id) {
-      const dataset = db.prepare("SELECT id FROM datasets WHERE id = ?").get(dataset_id);
-      if (!dataset) {
+      const exists = await datasetRepository.exists(dataset_id);
+      if (!exists) {
         return res.status(404).json({ error: "Dataset not found" });
       }
     }
 
     // Legacy: If using connection directly (backward compatibility)
     if (connection_id && !dataset_id) {
-      const connection = db.prepare("SELECT id FROM connections WHERE id = ?").get(connection_id);
-      if (!connection) {
+      const exists = await connectionRepository.exists(connection_id);
+      if (!exists) {
         return res.status(404).json({ error: "Connection not found" });
       }
 
@@ -111,35 +115,27 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
     }
 
     if (query_id) {
-      const query = db.prepare("SELECT id FROM saved_queries WHERE id = ?").get(query_id);
-      if (!query) {
+      const exists = await savedQueryRepository.exists(query_id);
+      if (!exists) {
         return res.status(404).json({ error: "Query not found" });
       }
     }
 
-    const chartId = uuidv4();
-
-    db.prepare(
-      `
-      INSERT INTO charts (id, name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-    ).run(
-      chartId,
+    const chart = await chartRepository.create({
       name,
-      description || null,
+      description,
       chart_type,
-      JSON.stringify(config),
-      dataset_id || null,
-      query_id || null,
-      sql_query || null,
-      connection_id || null,
-      req.user.id
-    );
+      config: JSON.stringify(config),
+      dataset_id,
+      query_id,
+      sql_query,
+      connection_id,
+      created_by: req.user.id,
+    });
 
     res.status(201).json({
       chart: {
-        id: chartId,
+        id: chart.id,
         name,
         description,
         chart_type,
@@ -158,34 +154,26 @@ router.post("/", requireRole("admin", "editor"), (req, res) => {
 });
 
 // Update chart
-router.put("/:id", requireRole("admin", "editor"), (req, res) => {
+router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
     const { name, description, chart_type, config, dataset_id, query_id, sql_query, connection_id } = req.body;
     const chartId = req.params.id;
 
-    const existing = db.prepare("SELECT * FROM charts WHERE id = ?").get(chartId);
+    const existing = await chartRepository.findById(chartId);
     if (!existing) {
       return res.status(404).json({ error: "Chart not found" });
     }
 
-    db.prepare(
-      `
-      UPDATE charts 
-      SET name = ?, description = ?, chart_type = ?, config = ?, 
-          dataset_id = ?, query_id = ?, sql_query = ?, connection_id = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(
-      name || existing.name,
-      description !== undefined ? description : existing.description,
-      chart_type || existing.chart_type,
-      config ? JSON.stringify(config) : existing.config,
-      dataset_id !== undefined ? dataset_id : existing.dataset_id,
-      query_id !== undefined ? query_id : existing.query_id,
-      sql_query !== undefined ? sql_query : existing.sql_query,
-      connection_id !== undefined ? connection_id : existing.connection_id,
-      chartId
-    );
+    await chartRepository.update(chartId, {
+      name: name || existing.name,
+      description: description !== undefined ? description : existing.description,
+      chart_type: chart_type || existing.chart_type,
+      config: config ? JSON.stringify(config) : existing.config,
+      dataset_id: dataset_id !== undefined ? dataset_id : existing.dataset_id,
+      query_id: query_id !== undefined ? query_id : existing.query_id,
+      sql_query: sql_query !== undefined ? sql_query : existing.sql_query,
+      connection_id: connection_id !== undefined ? connection_id : existing.connection_id,
+    });
 
     res.json({ message: "Chart updated successfully" });
   } catch (error) {
@@ -195,18 +183,18 @@ router.put("/:id", requireRole("admin", "editor"), (req, res) => {
 });
 
 // Delete chart
-router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
+router.delete("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
     const chartId = req.params.id;
 
-    const existing = db.prepare("SELECT id FROM charts WHERE id = ?").get(chartId);
-    if (!existing) {
+    const exists = await chartRepository.exists(chartId);
+    if (!exists) {
       return res.status(404).json({ error: "Chart not found" });
     }
 
     // Also remove from dashboard_charts
-    db.prepare("DELETE FROM dashboard_charts WHERE chart_id = ?").run(chartId);
-    db.prepare("DELETE FROM charts WHERE id = ?").run(chartId);
+    await prisma.dashboardChart.deleteMany({ where: { chart_id: chartId } });
+    await chartRepository.delete(chartId);
 
     res.json({ message: "Chart deleted successfully" });
   } catch (error) {
@@ -218,7 +206,7 @@ router.delete("/:id", requireRole("admin", "editor"), (req, res) => {
 // Get chart data (execute the chart's query)
 router.get("/:id/data", async (req, res) => {
   try {
-    const chart = db.prepare("SELECT * FROM charts WHERE id = ?").get(req.params.id);
+    const chart = await chartRepository.findById(req.params.id);
 
     if (!chart) {
       return res.status(404).json({ error: "Chart not found" });
@@ -228,12 +216,12 @@ router.get("/:id/data", async (req, res) => {
 
     // If chart uses a dataset, get data from dataset
     if (chart.dataset_id) {
-      const dataset = db.prepare("SELECT * FROM datasets WHERE id = ?").get(chart.dataset_id);
+      const dataset = await datasetRepository.findById(chart.dataset_id);
       if (!dataset) {
         return res.status(404).json({ error: "Associated dataset not found" });
       }
 
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(dataset.connection_id);
+      const connection = await connectionRepository.findById(dataset.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Dataset connection not found" });
       }
@@ -260,7 +248,7 @@ router.get("/:id/data", async (req, res) => {
       let sqlQuery = chart.sql_query;
       
       if (chart.query_id && !sqlQuery) {
-        const savedQuery = db.prepare("SELECT sql_query FROM saved_queries WHERE id = ?").get(chart.query_id);
+        const savedQuery = await savedQueryRepository.findById(chart.query_id);
         if (!savedQuery) {
           return res.status(404).json({ error: "Associated query not found" });
         }
@@ -271,7 +259,7 @@ router.get("/:id/data", async (req, res) => {
         return res.status(400).json({ error: "No SQL query associated with this chart" });
       }
 
-      const connection = db.prepare("SELECT * FROM connections WHERE id = ?").get(chart.connection_id);
+      const connection = await connectionRepository.findById(chart.connection_id);
       if (!connection) {
         return res.status(404).json({ error: "Connection not found" });
       }

@@ -7,7 +7,10 @@
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import db from "../../config/database.js";
+// TODO: This file needs full refactoring to use Prisma repositories
+// For now, using connectionRepository directly where possible
+import { prisma } from "../../db/client.js";
+import { connectionRepository } from "../../db/index.js";
 import { testConnection, closeConnection } from "../databaseConnector.js";
 import { findConnection, getAvailableConnectionsList } from "./utils.js";
 
