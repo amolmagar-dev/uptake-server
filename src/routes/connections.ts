@@ -341,4 +341,59 @@ router.get("/:id/tables/:tableName/schema", async (req, res) => {
   }
 });
 
+// Preview data from connection (API/Google Sheets)
+router.get("/:id/preview", async (req, res) => {
+  try {
+    const connection = await connectionRepository.findById(req.params.id);
+
+    if (!connection) {
+      return res.status(404).json({ error: "Connection not found" });
+    }
+
+    const config = connection.config ? JSON.parse(connection.config) : {};
+    let result;
+
+    if (connection.type === 'api') {
+      const { executeApiRequest } = await import("../services/apiConnector.js");
+      result = await executeApiRequest({ ...connection, config });
+    } else if (connection.type === 'googlesheet') {
+      const { fetchGoogleSheet } = await import("../services/googleSheetsConnector.js");
+      result = await fetchGoogleSheet({ ...connection, config });
+    } else {
+      return res.status(400).json({ error: "Preview is only available for API and Google Sheets connections" });
+    }
+
+    // Extract columns from the fields
+    const columns = result.fields.map(field => ({
+      column_name: field.name,
+      data_type: field.type || inferDataType(result.rows[0]?.[field.name]),
+    }));
+
+    res.json({
+      columns,
+      sampleData: result.rows.slice(0, 10),
+      rowCount: result.rowCount,
+    });
+  } catch (error) {
+    console.error("Preview connection error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Infer data type from value
+function inferDataType(value) {
+  if (value === null || value === undefined) return 'unknown';
+  if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'numeric';
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'string') {
+    // Check if it looks like a date
+    if (/^\d{4}-\d{2}-\d{2}/.test(value)) return 'timestamp';
+    return 'text';
+  }
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return 'json';
+  return 'text';
+}
+
 export default router;
+
