@@ -4,6 +4,7 @@ import { authenticateToken, requireRole } from "../middleware/auth.js";
 import { dashboardRepository, chartRepository, connectionRepository, datasetRepository, savedQueryRepository, customComponentRepository } from "../db/index.js";
 import { prisma } from "../db/client.js";
 import { executeQuery } from "../services/databaseConnector.js";
+import { renderQueryTemplate, hasTemplateVariables } from "../services/queryTemplateService.js";
 import { executeApiRequest } from "../services/apiConnector.js";
 import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
@@ -414,8 +415,26 @@ router.get("/:id/data", async (req, res) => {
               if (dataset.dataset_type === 'physical') {
                 const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
                 sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+                
+                // For physical tables, we could append WHERE clause if filters match columns
+                // But for now, templating is only for virtual datasets as per plan
               } else if (dataset.dataset_type === 'virtual') {
-                sqlQuery = dataset.sql_query;
+                // Parse filters from request query or body
+                const filterValues = req.query.filters ? 
+                  (typeof req.query.filters === 'string' ? JSON.parse(req.query.filters) : req.query.filters) : 
+                  (req.body.filters || {});
+                
+                const context = { filters: filterValues };
+                
+                if (dataset.sql_query && hasTemplateVariables(dataset.sql_query)) {
+                  try {
+                    sqlQuery = renderQueryTemplate(dataset.sql_query, context);
+                  } catch (err) {
+                    return { chartId: chart.id, dashboardChartId: item.id, error: `Template error: ${err.message}` };
+                  }
+                } else {
+                  sqlQuery = dataset.sql_query;
+                }
               }
 
               if (!sqlQuery) {
@@ -474,7 +493,22 @@ router.get("/:id/data", async (req, res) => {
                 const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
                 sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
               } else if (dataset.dataset_type === 'virtual') {
-                sqlQuery = dataset.sql_query;
+                 // Parse filters from request query or body
+                 const filterValues = req.query.filters ? 
+                  (typeof req.query.filters === 'string' ? JSON.parse(req.query.filters) : req.query.filters) : 
+                  (req.body.filters || {});
+                
+                const context = { filters: filterValues };
+
+                if (dataset.sql_query && hasTemplateVariables(dataset.sql_query)) {
+                  try {
+                    sqlQuery = renderQueryTemplate(dataset.sql_query, context);
+                  } catch (err) {
+                    return { componentId: component.id, chartId: component.id, dashboardChartId: item.id, error: `Template error: ${err.message}` };
+                  }
+                } else {
+                  sqlQuery = dataset.sql_query;
+                }
               }
 
               if (!sqlQuery) {

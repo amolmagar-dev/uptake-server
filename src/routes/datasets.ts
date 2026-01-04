@@ -4,6 +4,7 @@ import { authenticateToken, requireRole } from "../middleware/auth.js";
 import { datasetRepository, connectionRepository, chartRepository } from "../db/index.js";
 import { prisma } from "../db/client.js";
 import { executeQuery, getTableList, getTableSchema } from "../services/databaseConnector.js";
+import { renderQueryTemplate, hasTemplateVariables } from "../services/queryTemplateService.js";
 import { executeApiRequest } from "../services/apiConnector.js";
 import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
@@ -290,7 +291,16 @@ router.get("/:id/preview", async (req, res) => {
         const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
         sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}" LIMIT 100`;
       } else {
-        sqlQuery = `SELECT * FROM (${dataset.sql_query}) AS preview_subquery LIMIT 100`;
+        const filterValues = req.query.filters ? 
+                  (typeof req.query.filters === 'string' ? JSON.parse(req.query.filters) : req.query.filters) : {};
+        const context = { filters: filterValues };
+        
+        let subQuery = dataset.sql_query;
+        if (hasTemplateVariables(subQuery)) {
+           subQuery = renderQueryTemplate(subQuery, context);
+        }
+        
+        sqlQuery = `SELECT * FROM (${subQuery}) AS preview_subquery LIMIT 100`;
       }
 
       result = await executeQuery(connection, sqlQuery);
