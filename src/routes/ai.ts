@@ -12,11 +12,14 @@ const aiService = new AIService();
  */
 router.post("/chat", validateChatRequest, async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, contexts } = req.body;
     console.log("[API] /ai/chat endpoint called");
     console.log("[API] User message:", messages[messages.length - 1]?.content?.substring(0, 100));
+    if (contexts?.length) {
+      console.log("[API] Context provided:", contexts.length, "items");
+    }
 
-    const result = await aiService.runChat(messages);
+    const result = await aiService.runChat(messages, contexts);
     console.log("[API] Chat completed successfully");
 
     return res.json({

@@ -61,26 +61,76 @@ class AIService {
   }
 
   /**
+   * Build context prompt from user-provided contexts
+   */
+  buildContextPrompt(contexts) {
+    if (!contexts || contexts.length === 0) return '';
+
+    let contextPrompt = '\n\n## USER PROVIDED CONTEXT:\nThe user has selected the following items to provide context for this conversation. Use this information to better understand what they want to work with:\n';
+
+    for (const ctx of contexts) {
+      contextPrompt += `\n### ${ctx.type.toUpperCase()}: ${ctx.name}`;
+      
+      if (ctx.type === 'connection' && ctx.metadata) {
+        if (ctx.metadata.connectionType) {
+          contextPrompt += ` (${ctx.metadata.connectionType} database)`;
+        }
+        if (ctx.metadata.tables && ctx.metadata.tables.length > 0) {
+          contextPrompt += `\n   Selected tables: ${ctx.metadata.tables.join(', ')}`;
+        }
+      }
+      
+      if (ctx.type === 'dataset' && ctx.metadata) {
+        if (ctx.metadata.datasetType) {
+          contextPrompt += ` (${ctx.metadata.datasetType} dataset)`;
+        }
+        if (ctx.metadata.columns && ctx.metadata.columns.length > 0) {
+          contextPrompt += `\n   Available columns: ${ctx.metadata.columns.slice(0, 10).join(', ')}${ctx.metadata.columns.length > 10 ? '...' : ''}`;
+        }
+      }
+      
+      if (ctx.type === 'chart' && ctx.metadata?.chartType) {
+        contextPrompt += ` (${ctx.metadata.chartType} chart)`;
+      }
+      
+      if (ctx.customText) {
+        contextPrompt += `\n   User notes: ${ctx.customText}`;
+      }
+      
+      contextPrompt += '\n';
+    }
+
+    contextPrompt += '\nWhen responding, prioritize working with the above context items. If the user asks about data, queries, or visualizations, assume they want to use the selected contexts unless they specify otherwise.';
+
+    return contextPrompt;
+  }
+
+  /**
    * Add system prompt to messages if not present
    */
-  prepareMessages(messages) {
+  prepareMessages(messages, contexts = []) {
     // Check if there's already a system message
     const hasSystem = messages.some((m) => m.role === "system");
     if (hasSystem) {
       return messages;
     }
-    // Prepend system message
-    return [{ role: "system", content: SYSTEM_PROMPT }, ...messages];
+    // Build context-aware system prompt
+    const contextPrompt = this.buildContextPrompt(contexts);
+    // Prepend system message with context
+    return [{ role: "system", content: SYSTEM_PROMPT + contextPrompt }, ...messages];
   }
 
   /**
    * Run chat with accumulated text from stream
    */
-  async runChat(messages) {
+  async runChat(messages, contexts = []) {
     console.log("[AI SERVICE] Chat called with", messages.length, "messages");
+    if (contexts && contexts.length > 0) {
+      console.log("[AI SERVICE] Context items:", contexts.length);
+    }
     console.log("[AI SERVICE] Available tools:", this.tools.length, "tools");
     this.validateMessages(messages);
-    const preparedMessages = this.prepareMessages(messages);
+    const preparedMessages = this.prepareMessages(messages, contexts);
     console.log("[AI SERVICE] Messages prepared, starting chat stream...");
     const stream = chat({
       adapter: geminiText(this.model),
