@@ -18,16 +18,21 @@ const datasetManagementDef = toolDefinition({
 - list: List all datasets with their configurations
 - get: Get details of a specific dataset
 - create: Create a new dataset (physical table or virtual SQL query)
-- update: Update an existing dataset
+- update: Update an existing dataset (can change type, columns, query, etc.)
 - delete: Delete a dataset
 - preview: Get sample data from a dataset
 - get_columns: Get column information for a dataset
 
 Datasets are the data layer between connections and charts:
-- Physical datasets: Reference a table directly
-- Virtual datasets: Use a custom SQL query
+- Physical datasets: Reference a table directly (SELECT * FROM table)
+- Virtual datasets: Use a custom SQL query (can SELECT specific columns, add WHERE, JOIN, etc.)
 
-Use this when user wants to create data sources for visualizations.
+IMPORTANT: You CAN update existing datasets! To modify which columns are shown:
+1. Update the dataset_type from "physical" to "virtual"
+2. Set a custom sql_query like "SELECT col1, col2, col3 FROM table_name" (excluding unwanted columns)
+
+This effectively creates a filtered view of the data without creating a new dataset.
+
 You can use either dataset ID or dataset name for get, update, delete, preview, and get_columns actions.`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "preview", "get_columns"]).describe("The action to perform"),
