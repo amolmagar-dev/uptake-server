@@ -29,7 +29,7 @@ const databaseOperations = databaseOperationsDef.server(async ({ connectionId, s
   console.log("[TOOL] database_operations called with connection:", connectionId);
   try {
     // Get connection details - supports both ID and name
-    const connection = findConnection(connectionId);
+    const connection = await findConnection(connectionId);
 
     if (!connection) {
       console.warn("[TOOL] Connection not found:", connectionId);
@@ -37,7 +37,7 @@ const databaseOperations = databaseOperationsDef.server(async ({ connectionId, s
         success: false,
         error: "Connection not found",
         connectionId,
-        availableConnections: getAvailableConnectionsList(),
+        availableConnections: await getAvailableConnectionsList(),
       };
     }
     console.log("[TOOL] Found connection:", connection.name, "Type:", connection.type);

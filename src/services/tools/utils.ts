@@ -7,7 +7,7 @@ import { prisma } from "../../db/client.js";
 
 /**
  * Find a connection by ID or name
- * Tries ID first, then falls back to case-insensitive name matching
+ * Tries ID first, then falls back to name matching
  * @param {string} connectionIdOrName - Connection ID or name
  * @returns {object|null} - Connection object or null if not found
  */
@@ -19,11 +19,11 @@ export async function findConnection(connectionIdOrName) {
     where: { id: connectionIdOrName }
   });
 
-  // If not found by ID, try by name (case-insensitive)
+  // If not found by ID, try by name (SQLite doesn't support case-insensitive mode)
   if (!connection) {
     const connections = await prisma.connection.findMany({
       where: {
-        name: { equals: connectionIdOrName, mode: 'insensitive' }
+        name: connectionIdOrName
       },
       take: 1
     });
@@ -64,7 +64,7 @@ export async function findChart(chartIdOrName) {
   if (!chart) {
     const charts = await prisma.chart.findMany({
       where: {
-        name: { equals: chartIdOrName, mode: 'insensitive' }
+        name: chartIdOrName
       },
       take: 1
     });
@@ -89,7 +89,7 @@ export async function findDashboard(dashboardIdOrName) {
   if (!dashboard) {
     const dashboards = await prisma.dashboard.findMany({
       where: {
-        name: { equals: dashboardIdOrName, mode: 'insensitive' }
+        name: dashboardIdOrName
       },
       take: 1
     });
@@ -114,7 +114,7 @@ export async function findSavedQuery(queryIdOrName) {
   if (!query) {
     const queries = await prisma.savedQuery.findMany({
       where: {
-        name: { equals: queryIdOrName, mode: 'insensitive' }
+        name: queryIdOrName
       },
       take: 1
     });
@@ -122,4 +122,29 @@ export async function findSavedQuery(queryIdOrName) {
   }
 
   return query;
+}
+
+/**
+ * Find a dataset by ID or name
+ * @param {string} datasetIdOrName - Dataset ID or name
+ * @returns {object|null} - Dataset object or null if not found
+ */
+export async function findDataset(datasetIdOrName) {
+  if (!datasetIdOrName) return null;
+
+  let dataset = await prisma.dataset.findUnique({
+    where: { id: datasetIdOrName }
+  });
+
+  if (!dataset) {
+    const datasets = await prisma.dataset.findMany({
+      where: {
+        name: datasetIdOrName
+      },
+      take: 1
+    });
+    dataset = datasets[0] || null;
+  }
+
+  return dataset;
 }

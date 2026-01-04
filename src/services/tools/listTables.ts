@@ -22,7 +22,7 @@ const listTables = listTablesDef.server(async ({ connectionId }) => {
   try {
     // Get connection details - supports both ID and name
     console.log("[TOOL] Fetching connection details for:", connectionId);
-    const connection = findConnection(connectionId);
+    const connection = await findConnection(connectionId);
 
     if (!connection) {
       console.warn("[TOOL] Connection not found:", connectionId);
@@ -30,7 +30,7 @@ const listTables = listTablesDef.server(async ({ connectionId }) => {
         success: false,
         error: "Connection not found",
         connectionId,
-        availableConnections: getAvailableConnectionsList(),
+        availableConnections: await getAvailableConnectionsList(),
       };
     }
 
@@ -61,7 +61,7 @@ const listTables = listTablesDef.server(async ({ connectionId }) => {
       connectionId,
       connectionName: connection.name,
       databaseType: connection.type,
-      databaseName: connection.database,
+      databaseName: connection.database_name,
       tableCount: tables.length,
       tables: tables.sort((a, b) => a.name.localeCompare(b.name)),
     };

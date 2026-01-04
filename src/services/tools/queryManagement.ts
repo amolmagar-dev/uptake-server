@@ -2,12 +2,13 @@
 /**
  * Query Management Tool
  * Full CRUD operations for saved SQL queries
+ * Refactored to use Prisma repositories
  */
 
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
-import db from "../../config/database.js";
+import { prisma } from "../../db/client.js";
+import { savedQueryRepository } from "../../db/repositories/index.js";
 import { executeQuery } from "../databaseConnector.js";
 import { findConnection, findSavedQuery, getAvailableConnectionsList } from "./utils.js";
 
@@ -42,16 +43,13 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
   try {
     switch (action) {
       case "list": {
-        const queries = db
-          .prepare(
-            `SELECT sq.*, c.name as connection_name, c.type as connection_type,
-                    u.name as created_by_name
-             FROM saved_queries sq
-             LEFT JOIN connections c ON sq.connection_id = c.id
-             LEFT JOIN users u ON sq.created_by = u.id
-             ORDER BY sq.updated_at DESC`
-          )
-          .all();
+        const queries = await prisma.savedQuery.findMany({
+          include: {
+            connection: { select: { name: true, type: true } },
+            creator: { select: { name: true } }
+          },
+          orderBy: { updated_at: "desc" },
+        });
 
         return {
           success: true,
@@ -63,9 +61,9 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
             description: q.description,
             sqlQuery: q.sql_query,
             connectionId: q.connection_id,
-            connectionName: q.connection_name,
-            connectionType: q.connection_type,
-            createdBy: q.created_by_name,
+            connectionName: q.connection?.name,
+            connectionType: q.connection?.type,
+            createdBy: q.creator?.name,
             createdAt: q.created_at,
             updatedAt: q.updated_at,
           })),
@@ -77,28 +75,27 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for get action" };
         }
 
-        const queryBase = findSavedQuery(queryId);
+        const queryBase = await findSavedQuery(queryId);
         if (!queryBase) {
           return { success: false, error: "Query not found", queryId };
         }
 
-        const query = db
-          .prepare(
-            `SELECT sq.*, c.name as connection_name, c.type as connection_type
-             FROM saved_queries sq
-             LEFT JOIN connections c ON sq.connection_id = c.id
-             WHERE sq.id = ?`
-          )
-          .get(queryBase.id);
+        const query = await prisma.savedQuery.findUnique({
+          where: { id: queryBase.id },
+          include: {
+            connection: { select: { name: true, type: true } }
+          }
+        });
 
         if (!query) {
           return { success: false, error: "Query not found", queryId };
         }
 
         // Check if query is used by any charts
-        const usedByCharts = db
-          .prepare("SELECT id, name FROM charts WHERE query_id = ?")
-          .all(queryId);
+        const usedByCharts = await prisma.chart.findMany({
+          where: { query_id: query.id },
+          select: { id: true, name: true }
+        });
 
         return {
           success: true,
@@ -109,8 +106,8 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
             description: query.description,
             sqlQuery: query.sql_query,
             connectionId: query.connection_id,
-            connectionName: query.connection_name,
-            connectionType: query.connection_type,
+            connectionName: query.connection?.name,
+            connectionType: query.connection?.type,
             createdAt: query.created_at,
             updatedAt: query.updated_at,
             usedByCharts,
@@ -133,32 +130,33 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
         }
 
         // Verify connection exists - supports ID or name
-        const connection = findConnection(connection_id);
+        const connection = await findConnection(connection_id);
         if (!connection) {
           return { 
             success: false, 
             error: "Connection not found", 
             connectionId: connection_id,
-            availableConnections: getAvailableConnectionsList(),
+            availableConnections: await getAvailableConnectionsList(),
           };
         }
 
-        const newQueryId = uuidv4();
-
-        db.prepare(
-          `INSERT INTO saved_queries (id, name, description, sql_query, connection_id)
-           VALUES (?, ?, ?, ?, ?)`
-        ).run(newQueryId, name, description || null, sql_query, connection.id);
+        // Create query using repository
+        const newQuery = await savedQueryRepository.create({
+          name,
+          description: description || undefined,
+          sql_query,
+          connection_id: connection.id,
+        });
 
         return {
           success: true,
           action: "create",
           message: "Query saved successfully",
           query: {
-            id: newQueryId,
-            name,
-            description,
-            sqlQuery: sql_query,
+            id: newQuery.id,
+            name: newQuery.name,
+            description: newQuery.description,
+            sqlQuery: newQuery.sql_query,
             connectionId: connection.id,
             connectionName: connection.name,
           },
@@ -173,7 +171,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "data is required for update action" };
         }
 
-        const existing = findSavedQuery(queryId);
+        const existing = await findSavedQuery(queryId);
         if (!existing) {
           return { success: false, error: "Query not found", queryId };
         }
@@ -183,35 +181,31 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
         // If changing connection, verify it exists
         let connectionToUse = existing.connection_id;
         if (connection_id) {
-          const connection = findConnection(connection_id);
+          const connection = await findConnection(connection_id);
           if (!connection) {
             return { 
               success: false, 
               error: "Connection not found", 
               connectionId: connection_id,
-              availableConnections: getAvailableConnectionsList(),
+              availableConnections: await getAvailableConnectionsList(),
             };
           }
           connectionToUse = connection.id;
         }
 
-        db.prepare(
-          `UPDATE saved_queries SET 
-            name = ?, description = ?, sql_query = ?, connection_id = ?, updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`
-        ).run(
-          name || existing.name,
-          description !== undefined ? description : existing.description,
-          sql_query || existing.sql_query,
-          connectionToUse,
-          existing.id
-        );
+        // Update query using repository
+        await savedQueryRepository.update(existing.id, {
+          name: name || undefined,
+          description: description !== undefined ? description : undefined,
+          sql_query: sql_query || undefined,
+          connection_id: connectionToUse || undefined,
+        });
 
         return {
           success: true,
           action: "update",
           message: "Query updated successfully",
-          queryId,
+          queryId: existing.id,
         };
       }
 
@@ -220,13 +214,17 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for delete action" };
         }
 
-        const existing = findSavedQuery(queryId);
+        const existing = await findSavedQuery(queryId);
         if (!existing) {
           return { success: false, error: "Query not found", queryId };
         }
 
         // Check if any charts use this query
-        const chartsUsingQuery = db.prepare("SELECT id, name FROM charts WHERE query_id = ?").all(existing.id);
+        const chartsUsingQuery = await prisma.chart.findMany({
+          where: { query_id: existing.id },
+          select: { id: true, name: true }
+        });
+        
         if (chartsUsingQuery.length > 0) {
           return {
             success: false,
@@ -235,13 +233,14 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           };
         }
 
-        db.prepare("DELETE FROM saved_queries WHERE id = ?").run(existing.id);
+        // Delete query using repository
+        await savedQueryRepository.delete(existing.id);
 
         return {
           success: true,
           action: "delete",
           message: `Query "${existing.name}" deleted successfully`,
-          queryId,
+          queryId: existing.id,
         };
       }
 
@@ -250,12 +249,12 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
           return { success: false, error: "queryId is required for execute action" };
         }
 
-        const savedQuery = findSavedQuery(queryId);
+        const savedQuery = await findSavedQuery(queryId);
         if (!savedQuery) {
           return { success: false, error: "Query not found", queryId };
         }
 
-        const connection = findConnection(savedQuery.connection_id);
+        const connection = await findConnection(savedQuery.connection_id);
         if (!connection) {
           return { success: false, error: "Connection not found" };
         }
@@ -265,7 +264,7 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
         return {
           success: true,
           action: "execute",
-          queryId,
+          queryId: savedQuery.id,
           queryName: savedQuery.name,
           connectionName: connection.name,
           data: result.rows,
@@ -289,4 +288,3 @@ const queryManagement = queryManagementDef.server(async ({ action, queryId, data
 });
 
 export default queryManagement;
-

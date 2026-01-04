@@ -2,15 +2,13 @@
 /**
  * Connection Management Tool
  * Full CRUD operations for database connections
+ * Refactored to use Prisma repositories
  */
 
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
-import { v4 as uuidv4 } from "uuid";
-// TODO: This file needs full refactoring to use Prisma repositories
-// For now, using connectionRepository directly where possible
 import { prisma } from "../../db/client.js";
-import { connectionRepository } from "../../db/index.js";
+import { connectionRepository } from "../../db/repositories/index.js";
 import { testConnection, closeConnection } from "../databaseConnector.js";
 import { findConnection, getAvailableConnectionsList } from "./utils.js";
 
@@ -53,17 +51,23 @@ const connectionManagement = connectionManagementDef.server(
     try {
       switch (action) {
         case "list": {
-          let query =
-            "SELECT id, name, type, host, port, database_name, username, created_at FROM connections";
-          let params = [];
+          // Build filter condition for Prisma
+          const whereCondition = filter !== "all" ? { type: filter } : {};
 
-          if (filter !== "all") {
-            query += " WHERE type = ?";
-            params = [filter];
-          }
-          query += " ORDER BY created_at DESC";
-
-          const connections = db.prepare(query).all(...params);
+          const connections = await prisma.connection.findMany({
+            where: whereCondition,
+            select: {
+              id: true,
+              name: true,
+              type: true,
+              host: true,
+              port: true,
+              database_name: true,
+              username: true,
+              created_at: true,
+            },
+            orderBy: { created_at: "desc" },
+          });
 
           return {
             success: true,
@@ -93,14 +97,14 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for get action" };
           }
 
-          const connection = findConnection(connectionId);
+          const connection = await findConnection(connectionId);
 
           if (!connection) {
             return { 
               success: false, 
               error: "Connection not found", 
               connectionId,
-              availableConnections: getAvailableConnectionsList(),
+              availableConnections: await getAvailableConnectionsList(),
             };
           }
 
@@ -137,12 +141,11 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "host and database_name are required for non-SQLite connections" };
           }
 
-          const newConnectionId = uuidv4();
           const defaultPort = type === "postgresql" ? 5432 : type === "mysql" ? 3306 : null;
 
           // Test connection first
           const testConfig = {
-            id: newConnectionId,
+            id: "test-connection",
             type,
             host: host || "",
             port: port || defaultPort,
@@ -161,35 +164,31 @@ const connectionManagement = connectionManagementDef.server(
             };
           }
 
-          // Save connection
-          db.prepare(
-            `INSERT INTO connections (id, name, type, host, port, database_name, username, password, ssl)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).run(
-            newConnectionId,
+          // Create connection using repository
+          const newConnection = await connectionRepository.create({
             name,
             type,
-            host || null,
-            port || defaultPort,
-            database_name || null,
-            username || null,
-            password || null,
-            ssl ? 1 : 0
-          );
+            host: host || undefined,
+            port: port || defaultPort || undefined,
+            database_name: database_name || undefined,
+            username: username || undefined,
+            password: password || undefined,
+            ssl: ssl ? 1 : 0,
+          });
 
           return {
             success: true,
             action: "create",
             message: "Connection created and tested successfully",
             connection: {
-              id: newConnectionId,
-              name,
-              type,
-              host,
-              port: port || defaultPort,
-              database: database_name,
-              username,
-              ssl: ssl || false,
+              id: newConnection.id,
+              name: newConnection.name,
+              type: newConnection.type,
+              host: newConnection.host,
+              port: newConnection.port,
+              database: newConnection.database_name,
+              username: newConnection.username,
+              ssl: newConnection.ssl === 1,
             },
           };
         }
@@ -202,23 +201,23 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "data is required for update action" };
           }
 
-          const existing = findConnection(connectionId);
+          const existing = await findConnection(connectionId);
           if (!existing) {
             return { 
               success: false, 
               error: "Connection not found", 
               connectionId,
-              availableConnections: getAvailableConnectionsList(),
+              availableConnections: await getAvailableConnectionsList(),
             };
           }
 
-          closeConnection(connectionId);
+          closeConnection(existing.id);
 
           const { name, type, host, port, database_name, username, password, ssl } = data;
 
           // Test new configuration
           const testConfig = {
-            id: connectionId,
+            id: existing.id,
             type: type || existing.type,
             host: host || existing.host,
             port: port || existing.port,
@@ -236,30 +235,23 @@ const connectionManagement = connectionManagementDef.server(
             };
           }
 
-          // Update connection
-          db.prepare(
-            `UPDATE connections SET 
-              name = ?, type = ?, host = ?, port = ?, database_name = ?,
-              username = ?, password = COALESCE(?, password), ssl = ?, 
-              updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`
-          ).run(
-            name || existing.name,
-            type || existing.type,
-            host || existing.host,
-            port || existing.port,
-            database_name || existing.database_name,
-            username || existing.username,
-            password,
-            ssl !== undefined ? (ssl ? 1 : 0) : existing.ssl,
-            connectionId
-          );
+          // Update connection using repository
+          await connectionRepository.update(existing.id, {
+            name: name || undefined,
+            type: type || undefined,
+            host: host || undefined,
+            port: port || undefined,
+            database_name: database_name || undefined,
+            username: username || undefined,
+            password: password || undefined,
+            ssl: ssl !== undefined ? (ssl ? 1 : 0) : undefined,
+          });
 
           return {
             success: true,
             action: "update",
             message: "Connection updated successfully",
-            connectionId,
+            connectionId: existing.id,
           };
         }
 
@@ -268,24 +260,26 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for delete action" };
           }
 
-          const existing = findConnection(connectionId);
+          const existing = await findConnection(connectionId);
           if (!existing) {
             return { 
               success: false, 
               error: "Connection not found", 
               connectionId,
-              availableConnections: getAvailableConnectionsList(),
+              availableConnections: await getAvailableConnectionsList(),
             };
           }
 
           closeConnection(existing.id);
-          db.prepare("DELETE FROM connections WHERE id = ?").run(existing.id);
+          
+          // Delete connection using repository
+          await connectionRepository.delete(existing.id);
 
           return {
             success: true,
             action: "delete",
             message: `Connection "${existing.name}" deleted successfully`,
-            connectionId,
+            connectionId: existing.id,
           };
         }
 
@@ -294,13 +288,13 @@ const connectionManagement = connectionManagementDef.server(
             return { success: false, error: "connectionId is required for test action" };
           }
 
-          const connection = findConnection(connectionId);
+          const connection = await findConnection(connectionId);
           if (!connection) {
             return { 
               success: false, 
               error: "Connection not found", 
               connectionId,
-              availableConnections: getAvailableConnectionsList(),
+              availableConnections: await getAvailableConnectionsList(),
             };
           }
 
@@ -309,7 +303,7 @@ const connectionManagement = connectionManagementDef.server(
           return {
             success: result.success,
             action: "test",
-            connectionId,
+            connectionId: connection.id,
             connectionName: connection.name,
             message: result.message,
             databaseType: connection.type,
@@ -331,4 +325,3 @@ const connectionManagement = connectionManagementDef.server(
 );
 
 export default connectionManagement;
-

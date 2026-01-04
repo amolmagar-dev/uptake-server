@@ -37,7 +37,7 @@ const schemaExplorer = schemaExplorerDef.server(
     console.log("[TOOL] schema_explorer called with action:", action, "connection:", connectionId);
     try {
       // Get connection details - supports both ID and name
-      const connection = findConnection(connectionId);
+      const connection = await findConnection(connectionId);
 
       if (!connection) {
         console.warn("[TOOL] Connection not found:", connectionId);
@@ -45,7 +45,7 @@ const schemaExplorer = schemaExplorerDef.server(
           success: false,
           error: "Connection not found",
           connectionId,
-          availableConnections: getAvailableConnectionsList(),
+          availableConnections: await getAvailableConnectionsList(),
         };
       }
       console.log("[TOOL] Found connection:", connection.name, "Type:", connection.type);

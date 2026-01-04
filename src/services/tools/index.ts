@@ -11,12 +11,12 @@ import listConnections from "./listConnections.js";
 import databaseOperations from "./databaseOperations.js";
 import schemaExplorer from "./schemaExplorer.js";
 
-// TODO: The following tools need refactoring to use Prisma repositories
-// They are temporarily disabled until refactoring is complete
-// import connectionManagement from "./connectionManagement.js";
-// import chartManagement from "./chartManagement.js";
-// import dashboardManagement from "./dashboardManagement.js";
-// import queryManagement from "./queryManagement.js";
+// Management Tools (refactored to use Prisma)
+import connectionManagement from "./connectionManagement.js";
+import datasetManagement from "./datasetManagement.js";
+import chartManagement from "./chartManagement.js";
+import dashboardManagement from "./dashboardManagement.js";
+import queryManagement from "./queryManagement.js";
 
 // Utility Tools
 import projectHelper from "./projectHelper.js";
@@ -27,17 +27,26 @@ import projectHelper from "./projectHelper.js";
  * 
  * - database_operations: Execute SQL queries on any connection
  * - schema_explorer: Explore database structure (tables, columns, relationships)
+ * - connection_management: CRUD operations for database connections
+ * - dataset_management: CRUD operations for datasets (data sources for charts)
+ * - chart_management: CRUD operations for charts and visualizations
+ * - dashboard_management: CRUD operations for dashboards
+ * - query_management: CRUD operations for saved SQL queries
  * - project_helper: Project overview, search, and help
  * - list_tables: Quick table listing
  * - list_connections: Quick connection listing
- * 
- * NOTE: Management tools (connection_management, chart_management, dashboard_management, 
- * query_management) are temporarily disabled pending Prisma migration refactoring.
  */
 export const getAllTools = () => [
   // Primary tools - most commonly used
   databaseOperations,
   schemaExplorer,
+  
+  // Management tools
+  connectionManagement,
+  datasetManagement,
+  chartManagement,
+  dashboardManagement,
+  queryManagement,
   
   // Utility
   projectHelper,
@@ -60,9 +69,10 @@ export const getToolByName = (name) => {
  */
 export const getToolsByCategory = () => ({
   database: [databaseOperations, schemaExplorer, listTables],
-  connections: [listConnections],
+  connections: [listConnections, connectionManagement],
+  datasets: [datasetManagement],
+  visualization: [chartManagement],
+  dashboards: [dashboardManagement],
+  queries: [queryManagement],
   utility: [projectHelper],
-  // Temporarily removed: visualization: [chartManagement],
-  // Temporarily removed: dashboards: [dashboardManagement],
-  // Temporarily removed: queries: [queryManagement],
 });
