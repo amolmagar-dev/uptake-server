@@ -24,3 +24,10 @@ dist-ssr
 *.sw?
 
 /src/generated/prisma
+
+# Env
+.env
+
+# Database
+*.db
+*.sqlite
