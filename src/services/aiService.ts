@@ -20,9 +20,11 @@ const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data 
 5. **Dashboard Management**: Create and organize dashboards with multiple charts
 6. **Connection Management**: Add, test, and manage database connections
 7. **Query Management**: Save and reuse SQL queries
+8. **Custom Component Management**: Create custom HTML/CSS/JS components for specialized visualizations
 
 ## Guidelines:
 - When asked to create a chart, first create a dataset, then create the chart using that dataset
+- For custom components, create HTML/CSS/JS and optionally link to a dataset for dynamic data
 - Always use the appropriate tool - don't just describe what should be done, DO IT
 - For data questions, first list available connections if none is specified
 - When creating charts, ask for clarification on chart type and axes if not specified
@@ -101,6 +103,13 @@ class AIService {
       
       if (ctx.type === 'chart' && ctx.metadata?.chartType) {
         contextPrompt += ` (${ctx.metadata.chartType} chart)`;
+      }
+
+      if (ctx.type === 'component' && ctx.metadata) {
+        contextPrompt += ` (custom HTML/CSS/JS component)`;
+        if (ctx.metadata.datasetType) {
+          contextPrompt += `\n   Data source: ${ctx.metadata.datasetType}`;
+        }
       }
       
       if (ctx.customText) {

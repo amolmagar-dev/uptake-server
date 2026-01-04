@@ -17,6 +17,7 @@ import datasetManagement from "./datasetManagement.js";
 import chartManagement from "./chartManagement.js";
 import dashboardManagement from "./dashboardManagement.js";
 import queryManagement from "./queryManagement.js";
+import customComponentManagement from "./customComponentManagement.js";
 
 // Utility Tools
 import projectHelper from "./projectHelper.js";
@@ -32,6 +33,7 @@ import projectHelper from "./projectHelper.js";
  * - chart_management: CRUD operations for charts and visualizations
  * - dashboard_management: CRUD operations for dashboards
  * - query_management: CRUD operations for saved SQL queries
+ * - custom_component_management: CRUD operations for custom HTML/CSS/JS components
  * - project_helper: Project overview, search, and help
  * - list_tables: Quick table listing
  * - list_connections: Quick connection listing
@@ -47,6 +49,7 @@ export const getAllTools = () => [
   chartManagement,
   dashboardManagement,
   queryManagement,
+  customComponentManagement,
   
   // Utility
   projectHelper,
@@ -71,7 +74,7 @@ export const getToolsByCategory = () => ({
   database: [databaseOperations, schemaExplorer, listTables],
   connections: [listConnections, connectionManagement],
   datasets: [datasetManagement],
-  visualization: [chartManagement],
+  visualization: [chartManagement, customComponentManagement],
   dashboards: [dashboardManagement],
   queries: [queryManagement],
   utility: [projectHelper],

@@ -85,7 +85,8 @@ class CustomComponentRepository {
         connection_id: data.connection_id,
         sql_query: data.sql_query,
         dataset_id: data.dataset_id,
-        created_by: data.created_by,
+        // Only set created_by if it's provided (not set when created via AI)
+        ...(data.created_by ? { created_by: data.created_by } : {}),
       },
     });
   }
