@@ -8,6 +8,8 @@ import { renderQueryTemplate, hasTemplateVariables } from "../services/queryTemp
 import { executeApiRequest } from "../services/apiConnector.js";
 import { fetchGoogleSheet } from "../services/googleSheetsConnector.js";
 
+import { PG_OID_MAP } from "../constants.js";
+
 const router = Router();
 
 router.use(authenticateToken);
@@ -134,7 +136,7 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
                }
              }
             const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
-            columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+            columns = result.fields.map(f => ({ column_name: f.name, data_type: PG_OID_MAP[f.dataType] || PG_OID_MAP[f.type] || 'text' }));
           }
         } else if (source_type === 'api') {
           const result = await executeApiRequest(connection);
@@ -234,7 +236,7 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
                }
              }
             const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
-            columns = JSON.stringify(result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' })));
+            columns = JSON.stringify(result.fields.map(f => ({ column_name: f.name, data_type: PG_OID_MAP[f.dataType] || PG_OID_MAP[f.type] || 'text' })));
           }
         } catch (err) {
           console.warn("Could not fetch columns:", err.message);
@@ -390,7 +392,7 @@ router.get("/:id/columns", async (req, res) => {
             }
         }
         const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
-        columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+        columns = result.fields.map(f => ({ column_name: f.name, data_type: PG_OID_MAP[f.dataType] || PG_OID_MAP[f.type] || 'text' }));
       }
     } else if (dataset.source_type === 'api' && dataset.connection_id) {
       const connection = await connectionRepository.findById(dataset.connection_id);
@@ -459,7 +461,7 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
             }
         }
         const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
-        columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
+        columns = result.fields.map(f => ({ column_name: f.name, data_type: PG_OID_MAP[f.dataType] || PG_OID_MAP[f.type] || 'text' }));
       }
     } else if (dataset.source_type === 'api') {
       const result = await executeApiRequest(connection);
