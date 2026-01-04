@@ -122,7 +122,18 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
             const schemaColumns = await getTableSchema(connection, table_name, table_schema);
             columns = schemaColumns;
           } else if (dataset_type === 'virtual' && sql_query) {
-            const result = await executeQuery(connection, `SELECT * FROM (${sql_query}) AS subq LIMIT 0`);
+             let subQuery = sql_query;
+             if (hasTemplateVariables(subQuery)) {
+               // Use empty context to validate structure/get columns
+               // This assumes the query is valid with empty strings/nulls for filters
+               try {
+                  subQuery = renderQueryTemplate(subQuery, { filters: {} });
+               } catch (e) {
+                  // If rendering fails (e.g. filter requires a value), try to proceed or just let it fail at execution
+                  console.warn("Template render warning during create:", e.message);
+               }
+             }
+            const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
             columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
           }
         } else if (source_type === 'api') {
@@ -214,7 +225,15 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
             const schemaColumns = await getTableSchema(connection, newTableName, newTableSchema);
             columns = JSON.stringify(schemaColumns);
           } else if (newDatasetType === 'virtual' && newSqlQuery) {
-            const result = await executeQuery(connection, `SELECT * FROM (${newSqlQuery}) AS subq LIMIT 0`);
+             let subQuery = newSqlQuery;
+             if (hasTemplateVariables(subQuery)) {
+               try {
+                  subQuery = renderQueryTemplate(subQuery, { filters: {} });
+               } catch (e) {
+                  console.warn("Template render warning during update:", e.message);
+               }
+             }
+            const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
             columns = JSON.stringify(result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' })));
           }
         } catch (err) {
@@ -362,7 +381,15 @@ router.get("/:id/columns", async (req, res) => {
       if (dataset.dataset_type === 'physical' && dataset.table_name) {
         columns = await getTableSchema(connection, dataset.table_name, dataset.table_schema);
       } else if (dataset.dataset_type === 'virtual' && dataset.sql_query) {
-        const result = await executeQuery(connection, `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT 0`);
+        let subQuery = dataset.sql_query;
+        if (hasTemplateVariables(subQuery)) {
+            try {
+              subQuery = renderQueryTemplate(subQuery, { filters: {} });
+            } catch (e) {
+              console.warn("Template render warning during get columns:", e.message);
+            }
+        }
+        const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
         columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
       }
     } else if (dataset.source_type === 'api' && dataset.connection_id) {
@@ -423,7 +450,15 @@ router.post("/:id/refresh-columns", requireRole("admin", "editor"), async (req, 
       if (dataset.dataset_type === 'physical' && dataset.table_name) {
         columns = await getTableSchema(connection, dataset.table_name, dataset.table_schema);
       } else if (dataset.dataset_type === 'virtual' && dataset.sql_query) {
-        const result = await executeQuery(connection, `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT 0`);
+        let subQuery = dataset.sql_query;
+        if (hasTemplateVariables(subQuery)) {
+            try {
+              subQuery = renderQueryTemplate(subQuery, { filters: {} });
+            } catch (e) {
+               console.warn("Template render warning during refresh columns:", e.message);
+            }
+        }
+        const result = await executeQuery(connection, `SELECT * FROM (${subQuery}) AS subq LIMIT 0`);
         columns = result.fields.map(f => ({ column_name: f.name, data_type: f.type || 'unknown' }));
       }
     } else if (dataset.source_type === 'api') {
