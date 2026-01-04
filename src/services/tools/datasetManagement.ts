@@ -33,7 +33,16 @@ IMPORTANT: You CAN update existing datasets! To modify which columns are shown:
 
 This effectively creates a filtered view of the data without creating a new dataset.
 
-You can use either dataset ID or dataset name for get, update, delete, preview, and get_columns actions.`,
+You can use either dataset ID or dataset name for get, update, delete, preview, and get_columns actions.
+
+Supports Nunjucks templating in virtual dataset SQL queries for dynamic filtering:
+- Variables: {{ filters.name }}
+- Filters:
+  - safely escape strings: {{ filters.val | safe_string }}
+  - format lists for IN clauses: {{ filters.vals | safe_list }}
+  - validate numbers: {{ filters.num | safe_number }}
+  - validate dates: {{ filters.date | safe_date }}
+- Example: SELECT * FROM users WHERE status = '{{ filters.status | safe_string }}' AND id IN ({{ filters.ids | safe_list }})`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "preview", "get_columns"]).describe("The action to perform"),
     datasetId: z.string().optional().describe("Dataset ID (required for get, update, delete, preview, get_columns)"),

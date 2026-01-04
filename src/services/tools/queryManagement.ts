@@ -23,7 +23,16 @@ const queryManagementDef = toolDefinition({
 - execute: Execute a saved query and return results
 Use this when user wants to save, modify, or reuse SQL queries.
 Saved queries can be attached to charts for visualization.
-You can use either query ID or query name for get, update, delete, and execute actions.`,
+You can use either query ID or query name for get, update, delete, and execute actions.
+
+Supports Nunjucks templating in SQL queries for dynamic filtering:
+- Variables: {{ filters.name }}
+- Filters:
+  - safely escape strings: {{ filters.val | safe_string }}
+  - format lists for IN clauses: {{ filters.vals | safe_list }}
+  - validate numbers: {{ filters.num | safe_number }}
+  - validate dates: {{ filters.date | safe_date }}
+- Example: SELECT * FROM users WHERE status = '{{ filters.status | safe_string }}' AND id IN ({{ filters.ids | safe_list }})`,
   inputSchema: z.object({
     action: z.enum(["list", "get", "create", "update", "delete", "execute"]).describe("The action to perform"),
     queryId: z.string().optional().describe("Query ID (required for get, update, delete, execute)"),
