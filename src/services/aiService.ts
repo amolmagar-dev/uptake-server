@@ -8,8 +8,6 @@ import { chat } from "@tanstack/ai";
 import { geminiText } from "@tanstack/ai-gemini";
 import { getAllTools } from "./tools/index.js";
 
-const DEFAULT_MODEL = "gemini-2.5-pro";
-
 const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You have full access to the project's capabilities through tools.
 
 ## Your Capabilities:
@@ -55,7 +53,7 @@ Remember: You can execute actions directly. Don't just tell users what to do - h
 
 class AIService {
   constructor(model = null) {
-    this.model = model || process.env.AI_MODEL || DEFAULT_MODEL;
+    this.model = model || process.env.AI_MODEL;
     this.tools = getAllTools();
   }
 
