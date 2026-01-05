@@ -6,7 +6,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "sqlite"  // Default provider, pg adapter used at runtime for PostgreSQL
+  url      = env("DATABASE_URL")
 }
 
 // User authentication and profiles
