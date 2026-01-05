@@ -162,6 +162,7 @@ class AIService {
     let toolCalls = [];
 
     for await (const chunk of stream) {
+      console.log("[AI SERVICE] Chunk received:", JSON.stringify(chunk));
       if (chunk.type === "content" && chunk.content) {
         console.log("[AI SERVICE] Content chunk received, length:", chunk.content.length);
         text = chunk.content; // content is cumulative, not delta

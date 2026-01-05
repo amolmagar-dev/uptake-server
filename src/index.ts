@@ -20,6 +20,9 @@ import aiRoutes from "./routes/ai.js";
 import componentRoutes from "./routes/components.js";
 import datasetRoutes from "./routes/datasets.js";
 
+import { logger } from "./utils/logger.js";
+import { pinoHttp } from "pino-http";
+
 // Import database initialization
 import { initializeDatabase } from "./config/database.js";
 
@@ -42,6 +45,22 @@ const PORT = process.env.PORT || 3001;
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+// Logger middleware
+app.use(
+  pinoHttp({
+    logger,
+    customLogLevel: (req, res, err) => {
+      if (res.statusCode >= 500 || err) {
+        return "error";
+      }
+      if (res.statusCode >= 400) {
+        return "warn";
+      }
+      return "info";
+    },
   })
 );
 
@@ -109,15 +128,17 @@ app.use((_req: Request, res: Response) => {
 
 // Global error handler
 const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-  console.error("Error:", err);
+  logger.error(err, "Error:");
   res.status(err.status || 500).json({
     error: err.message || "Internal server error",
   });
 };
 app.use(errorHandler);
 
+
+
 app.listen(PORT, () => {
-  console.log(`
+  logger.info(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║   🚀 Uptake Backend Server                                ║
