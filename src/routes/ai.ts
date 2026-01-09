@@ -25,6 +25,7 @@ router.post("/chat", validateChatRequest, async (req, res) => {
     return res.json({
       message: result.text,
       model: result.model,
+      widgets: result.widgets || null, // NEW: Include widget data for frontend
     });
   } catch (error) {
     console.error("[API] AI chat error:", error);

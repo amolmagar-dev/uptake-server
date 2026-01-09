@@ -20,7 +20,21 @@ const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data 
 7. **Query Management**: Save and reuse SQL queries
 8. **Custom Component Management**: Create custom HTML/CSS/JS components for specialized visualizations
 
-## Guidelines:
+## ⚠️ CRITICAL RULES - VIOLATING THESE IS FORBIDDEN:
+1. **NEVER return data in text format** - You are FORBIDDEN from displaying data as text, JSON, or markdown tables
+2. **ALWAYS use database_operations tool** when asked to show/display/preview/fetch any data
+3. **NEVER use dataset_management to retrieve data** - Use database_operations with a SELECT query instead
+4. **DO NOT describe data** - Execute the query with database_operations to show actual data in an interactive widget
+5. If you receive dataset context, you MUST still use database_operations to query the actual table data
+
+## When User Asks for Data (Examples):
+- "Show me records" → Use database_operations with SELECT query
+- "Display data from table X" → Use database_operations with SELECT query
+- "What's in this dataset?" → Use database_operations with SELECT query
+- "Preview the data" → Use database_operations with SELECT query
+- "Get first N rows" → Use database_operations with SELECT ... LIMIT N
+
+## Other Guidelines:
 - When asked to create a chart, first create a dataset, then create the chart using that dataset
 - For custom components, create HTML/CSS/JS and optionally link to a dataset for dynamic data
 - Always use the appropriate tool - don't just describe what should be done, DO IT
@@ -49,7 +63,7 @@ const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data 
 - Physical: References a database table directly
 - Virtual: Uses a custom SQL query (for filtering columns, joining tables, etc.)
 
-Remember: You can execute actions directly. Don't just tell users what to do - help them by doing it!`;
+Remember: ALWAYS use database_operations to show data. The user will see an interactive widget with the results. NEVER return data as text!`;
 
 class AIService {
   constructor(model = null) {
@@ -158,6 +172,7 @@ class AIService {
     // Accumulate text from stream chunks
     let text = "";
     let toolCalls = [];
+    let widgets = []; // NEW: Collect widgets from tool results
 
     for await (const chunk of stream) {
       console.log("[AI SERVICE] Chunk received:", JSON.stringify(chunk));
@@ -169,13 +184,31 @@ class AIService {
         console.log("[AI SERVICE] Tool call detected:", chunk.toolName || chunk.name);
         toolCalls.push(chunk);
       }
+      // NEW: Extract widget from tool_result chunks
+      if (chunk.type === "tool_result" && chunk.content) {
+        try {
+          // Tool result content is JSON string, parse it
+          const toolResult = typeof chunk.content === 'string' 
+            ? JSON.parse(chunk.content) 
+            : chunk.content;
+          
+          // Check if widget exists in the parsed result
+          if (toolResult?.widget) {
+            console.log("[AI SERVICE] Widget data found in tool result for:", chunk.toolCallId);
+            widgets.push(toolResult.widget);
+          }
+        } catch (error) {
+          console.error("[AI SERVICE] Error parsing tool result:", error);
+        }
+      }
     }
 
-    console.log("[AI SERVICE] Stream complete. Text length:", text.length, "Tool calls:", toolCalls.length);
+    console.log("[AI SERVICE] Stream complete. Text length:", text.length, "Tool calls:", toolCalls.length, "Widgets:", widgets.length);
     return {
       text: text || "No response.",
       model: this.model,
       toolCalls: toolCalls.length > 0 ? toolCalls : null,
+      widgets: widgets.length > 0 ? widgets : null, // NEW: Return widgets if any
     };
   }
 

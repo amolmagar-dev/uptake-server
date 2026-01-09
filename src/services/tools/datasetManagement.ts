@@ -16,12 +16,16 @@ const datasetManagementDef = toolDefinition({
   name: "dataset_management",
   description: `Manage datasets - data source abstractions for charts. Supported actions:
 - list: List all datasets with their configurations
-- get: Get details of a specific dataset
+- get: Get details of a specific dataset (metadata only)
 - create: Create a new dataset (physical table or virtual SQL query)
 - update: Update an existing dataset (can change type, columns, query, etc.)
 - delete: Delete a dataset
-- preview: Get sample data from a dataset
 - get_columns: Get column information for a dataset
+
+⚠️ IMPORTANT: DO NOT use the preview action to show data to users!
+- If the user wants to SEE/DISPLAY/PREVIEW data, use the database_operations tool instead
+- The preview action is for internal validation only, not for displaying data to users
+- Only database_operations creates interactive data widgets
 
 Datasets are the data layer between connections and charts:
 - Physical datasets: Reference a table directly (SELECT * FROM table)
@@ -33,7 +37,7 @@ IMPORTANT: You CAN update existing datasets! To modify which columns are shown:
 
 This effectively creates a filtered view of the data without creating a new dataset.
 
-You can use either dataset ID or dataset name for get, update, delete, preview, and get_columns actions.
+You can use either dataset ID or dataset name for get, update, delete, and get_columns actions.
 
 Supports Nunjucks templating in virtual dataset SQL queries for dynamic filtering:
 - Variables: {{ filters.name }}
