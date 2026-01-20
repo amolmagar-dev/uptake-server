@@ -272,12 +272,34 @@ router.get("/:id/data", async (req, res) => {
       fields: result.fields,
       rowCount: result.rowCount,
       executionTime: result.executionTime,
-      chartConfig: JSON.parse(chart.config),
+      chartConfig: interpolateDataInConfig(JSON.parse(chart.config), result.rows),
     });
   } catch (error) {
     console.error("Get chart data error:", error);
     res.status(400).json({ error: error.message });
   }
 });
+
+/**
+ * Interpolate $DATA placeholder in chart config with actual data rows.
+ * Supports both "$DATA" string format and dataset.source merging.
+ */
+function interpolateDataInConfig(config: any, rows: any[]): any {
+  // Convert to string and check for $DATA placeholder
+  const configStr = JSON.stringify(config);
+  
+  if (configStr.includes('"$DATA"')) {
+    // Replace "$DATA" with actual data array
+    const interpolated = configStr.replace('"$DATA"', JSON.stringify(rows));
+    return JSON.parse(interpolated);
+  }
+  
+  // Legacy: merge into dataset.source if it exists
+  if (config.dataset) {
+    return { ...config, dataset: { ...config.dataset, source: rows } };
+  }
+  
+  return config;
+}
 
 export default router;
