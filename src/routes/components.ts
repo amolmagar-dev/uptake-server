@@ -80,7 +80,6 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
       return res.status(400).json({ error: "Name and HTML content are required" });
     }
 
-    // Validate dataset if provided (optional - components can be static)
     if (dataset_id) {
       const datasetExists = await datasetRepository.exists(dataset_id);
       if (!datasetExists) {
@@ -188,7 +187,6 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Component not found" });
     }
 
-    // No data source - return component without data (static component)
     if (!component.dataset_id || !component.dataset) {
       return res.json({
         component: { ...component, config: component.config ? JSON.parse(component.config) : {} },

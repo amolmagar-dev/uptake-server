@@ -81,7 +81,6 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
       return res.status(400).json({ error: "Name, chart type, and config are required" });
     }
 
-    // Dataset is required - enforces Connection → Dataset → Chart flow
     if (!dataset_id) {
       return res.status(400).json({ error: "dataset_id is required" });
     }
@@ -182,7 +181,6 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Chart not found" });
     }
 
-    // Charts require a dataset - enforces Connection → Dataset → Chart flow
     if (!chart.dataset_id) {
       return res.status(400).json({ error: "Chart has no dataset configured" });
     }

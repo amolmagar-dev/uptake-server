@@ -398,7 +398,6 @@ router.get("/:id/data", async (req, res) => {
           const chart = item.chart;
           let result;
 
-          // Charts require a dataset
           if (!chart.dataset_id || !chart.dataset) {
             return { chartId: chart.id, dashboardChartId: item.id, error: "No dataset configured" };
           }
@@ -457,7 +456,6 @@ router.get("/:id/data", async (req, res) => {
           const component = item.component;
           let result;
 
-          // Components may or may not have a dataset (static components don't need data)
           if (component.dataset_id && component.dataset) {
             const dataset = component.dataset;
             const connection = dataset.connection;
@@ -502,7 +500,6 @@ router.get("/:id/data", async (req, res) => {
             }
           }
 
-          // Return component with or without data
           return {
             componentId: component.id,
             chartId: component.id, // For backward compatibility
