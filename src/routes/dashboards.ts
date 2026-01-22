@@ -19,6 +19,7 @@ router.get("/public/:id", async (req, res) => {
         dashboardCharts: {
           include: {
             chart: true,
+            component: true,
           },
         },
       },
@@ -34,12 +35,10 @@ router.get("/public/:id", async (req, res) => {
         layout: JSON.parse(dashboard.layout),
         charts: dashboard.dashboardCharts.map((dc) => ({
           ...dc,
-          name: dc.chart?.name,
+          name: dc.chart?.name || dc.component?.name,
           chart_type: dc.chart?.chart_type,
-          config: dc.chart?.config ? JSON.parse(dc.chart.config) : {},
-          sql_query: dc.chart?.sql_query,
-          query_id: dc.chart?.query_id,
-          connection_id: dc.chart?.connection_id,
+          config: dc.chart?.config ? JSON.parse(dc.chart.config) : (dc.component?.config ? JSON.parse(dc.component.config) : {}),
+          dataset_id: dc.chart?.dataset_id || dc.component?.dataset_id,
         })),
         dashboardCharts: undefined,
       },
@@ -90,9 +89,11 @@ router.get("/:id", async (req, res) => {
         dashboardCharts: {
           include: {
             chart: {
-              include: { connection: { select: { name: true } } },
+              include: { dataset: { select: { name: true } } },
             },
-            component: true,
+            component: {
+              include: { dataset: { select: { name: true } } },
+            },
           },
         },
       },
@@ -118,9 +119,8 @@ router.get("/:id", async (req, res) => {
           name: item.chart.name,
           chart_type: item.chart.chart_type,
           config: item.chart.config ? JSON.parse(item.chart.config) : {},
-          sql_query: item.chart.sql_query,
-          connection_id: item.chart.connection_id,
-          connection_name: item.chart.connection?.name,
+          dataset_id: item.chart.dataset_id,
+          dataset_name: item.chart.dataset?.name,
         };
       } else if (item.component_id && item.component) {
         return {
@@ -135,8 +135,8 @@ router.get("/:id", async (req, res) => {
           type: 'component',
           name: item.component.name,
           config: item.component.config ? JSON.parse(item.component.config) : {},
-          sql_query: item.component.sql_query,
-          connection_id: item.component.connection_id,
+          dataset_id: item.component.dataset_id,
+          dataset_name: item.component.dataset?.name,
         };
       }
       return item;
@@ -382,14 +382,11 @@ router.get("/:id/data", async (req, res) => {
         chart: {
           include: {
             dataset: { include: { connection: true } },
-            connection: true,
-            savedQuery: true,
           },
         },
         component: {
           include: {
             dataset: { include: { connection: true } },
-            connection: true,
           },
         },
       },
@@ -401,69 +398,51 @@ router.get("/:id/data", async (req, res) => {
           const chart = item.chart;
           let result;
 
-          // If chart uses a dataset
-          if (chart.dataset_id && chart.dataset) {
-            const dataset = chart.dataset;
-            const connection = dataset.connection;
+          // Charts require a dataset
+          if (!chart.dataset_id || !chart.dataset) {
+            return { chartId: chart.id, dashboardChartId: item.id, error: "No dataset configured" };
+          }
 
-            if (!connection) {
-              return { chartId: chart.id, dashboardChartId: item.id, error: "No connection" };
-            }
+          const dataset = chart.dataset;
+          const connection = dataset.connection;
 
-            if (dataset.source_type === 'sql') {
-              let sqlQuery;
-              if (dataset.dataset_type === 'physical') {
-                const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
-                sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
-                
-                // For physical tables, we could append WHERE clause if filters match columns
-                // But for now, templating is only for virtual datasets as per plan
-              } else if (dataset.dataset_type === 'virtual') {
-                // Parse filters from request query or body
-                const filterValues = req.query.filters ? 
-                  (typeof req.query.filters === 'string' ? JSON.parse(req.query.filters) : req.query.filters) : 
-                  (req.body.filters || {});
-                
-                const context = { filters: filterValues };
-                
-                if (dataset.sql_query && hasTemplateVariables(dataset.sql_query)) {
-                  try {
-                    sqlQuery = renderQueryTemplate(dataset.sql_query, context);
-                  } catch (err) {
-                    return { chartId: chart.id, dashboardChartId: item.id, error: `Template error: ${err.message}` };
-                  }
-                } else {
-                  sqlQuery = dataset.sql_query;
+          if (!connection) {
+            return { chartId: chart.id, dashboardChartId: item.id, error: "No connection" };
+          }
+
+          if (dataset.source_type === 'sql') {
+            let sqlQuery;
+            if (dataset.dataset_type === 'physical') {
+              const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+              sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+            } else if (dataset.dataset_type === 'virtual') {
+              // Parse filters from request query or body
+              const filterValues = req.query.filters ? 
+                (typeof req.query.filters === 'string' ? JSON.parse(req.query.filters) : req.query.filters) : 
+                (req.body.filters || {});
+              
+              const context = { filters: filterValues };
+              
+              if (dataset.sql_query && hasTemplateVariables(dataset.sql_query)) {
+                try {
+                  sqlQuery = renderQueryTemplate(dataset.sql_query, context);
+                } catch (err) {
+                  return { chartId: chart.id, dashboardChartId: item.id, error: `Template error: ${err.message}` };
                 }
+              } else {
+                sqlQuery = dataset.sql_query;
               }
-
-              if (!sqlQuery) {
-                return { chartId: chart.id, dashboardChartId: item.id, error: "No query" };
-              }
-
-              result = await executeQuery(connection, sqlQuery);
-            } else if (dataset.source_type === 'api') {
-              result = await executeApiRequest(connection);
-            } else if (dataset.source_type === 'googlesheet') {
-              result = await fetchGoogleSheet(connection);
-            }
-          } else {
-            // Legacy: chart uses connection directly
-            let sqlQuery = chart.sql_query;
-
-            if (chart.query_id && chart.savedQuery && !sqlQuery) {
-              sqlQuery = chart.savedQuery.sql_query;
             }
 
             if (!sqlQuery) {
               return { chartId: chart.id, dashboardChartId: item.id, error: "No query" };
             }
 
-            if (!chart.connection) {
-              return { chartId: chart.id, dashboardChartId: item.id, error: "No connection" };
-            }
-
-            result = await executeQuery(chart.connection, sqlQuery);
+            result = await executeQuery(connection, sqlQuery);
+          } else if (dataset.source_type === 'api') {
+            result = await executeApiRequest(connection);
+          } else if (dataset.source_type === 'googlesheet') {
+            result = await fetchGoogleSheet(connection);
           }
 
           return {
@@ -478,7 +457,7 @@ router.get("/:id/data", async (req, res) => {
           const component = item.component;
           let result;
 
-          // If component uses a dataset
+          // Components may or may not have a dataset (static components don't need data)
           if (component.dataset_id && component.dataset) {
             const dataset = component.dataset;
             const connection = dataset.connection;
@@ -521,15 +500,9 @@ router.get("/:id/data", async (req, res) => {
             } else if (dataset.source_type === 'googlesheet') {
               result = await fetchGoogleSheet(connection);
             }
-          } else if (component.sql_query) {
-            // Legacy: component uses connection directly
-            if (!component.connection) {
-              return { componentId: component.id, chartId: component.id, dashboardChartId: item.id, error: "No connection" };
-            }
-
-            result = await executeQuery(component.connection, component.sql_query);
           }
 
+          // Return component with or without data
           return {
             componentId: component.id,
             chartId: component.id, // For backward compatibility
