@@ -47,11 +47,9 @@ model Connection {
   updated_at    DateTime @updatedAt
 
   // Relations
-  creator          User?             @relation(fields: [created_by], references: [id])
-  savedQueries     SavedQuery[]
-  datasets         Dataset[]
-  charts           Chart[]
-  customComponents CustomComponent[]
+  creator      User?        @relation(fields: [created_by], references: [id])
+  savedQueries SavedQuery[]
+  datasets     Dataset[]
 
   @@map("connections")
 }
@@ -70,7 +68,6 @@ model SavedQuery {
   // Relations
   connection Connection @relation(fields: [connection_id], references: [id])
   creator    User?      @relation(fields: [created_by], references: [id])
-  charts     Chart[]
 
   @@map("saved_queries")
 }
@@ -108,18 +105,13 @@ model Chart {
   description   String?
   chart_type    String
   config        String   // JSON string
-  query_id      String?
-  sql_query     String?
-  connection_id String?
-  dataset_id    String?
+  dataset_id    String   // Required - enforces Connection → Dataset → Chart flow
   created_by    String?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   // Relations
-  savedQuery      SavedQuery?      @relation(fields: [query_id], references: [id])
-  connection      Connection?      @relation(fields: [connection_id], references: [id])
-  dataset         Dataset?         @relation(fields: [dataset_id], references: [id])
+  dataset         Dataset          @relation(fields: [dataset_id], references: [id])
   creator         User?            @relation(fields: [created_by], references: [id])
   dashboardCharts DashboardChart[]
 
@@ -173,15 +165,12 @@ model CustomComponent {
   css_content   String?
   js_content    String?
   config        String?  // JSON string
-  connection_id String?
-  sql_query     String?
-  dataset_id    String?
+  dataset_id    String?  // Optional - components can be static without data
   created_by    String?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   // Relations
-  connection      Connection?      @relation(fields: [connection_id], references: [id])
   dataset         Dataset?         @relation(fields: [dataset_id], references: [id])
   creator         User?            @relation(fields: [created_by], references: [id])
   dashboardCharts DashboardChart[]

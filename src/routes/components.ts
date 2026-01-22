@@ -16,7 +16,6 @@ router.get("/", async (req, res) => {
   try {
     const components = await prisma.customComponent.findMany({
       include: {
-        connection: { select: { name: true, type: true } },
         dataset: { select: { name: true, dataset_type: true, source_type: true } },
         creator: { select: { name: true } },
       },
@@ -26,14 +25,11 @@ router.get("/", async (req, res) => {
     // Parse config JSON and format response
     const parsedComponents = components.map((comp) => ({
       ...comp,
-      connection_name: comp.connection?.name,
-      connection_type: comp.connection?.type,
       dataset_name: comp.dataset?.name,
       dataset_type: comp.dataset?.dataset_type,
       source_type: comp.dataset?.source_type,
       created_by_name: comp.creator?.name,
       config: comp.config ? JSON.parse(comp.config) : {},
-      connection: undefined,
       dataset: undefined,
       creator: undefined,
     }));
@@ -51,7 +47,6 @@ router.get("/:id", async (req, res) => {
     const component = await prisma.customComponent.findUnique({
       where: { id: req.params.id },
       include: {
-        connection: { select: { name: true, type: true } },
         dataset: { select: { name: true, dataset_type: true, source_type: true } },
       },
     });
@@ -63,13 +58,10 @@ router.get("/:id", async (req, res) => {
     res.json({
       component: {
         ...component,
-        connection_name: component.connection?.name,
-        connection_type: component.connection?.type,
         dataset_name: component.dataset?.name,
         dataset_type: component.dataset?.dataset_type,
         source_type: component.dataset?.source_type,
         config: component.config ? JSON.parse(component.config) : {},
-        connection: undefined,
         dataset: undefined,
       },
     });
@@ -82,25 +74,17 @@ router.get("/:id", async (req, res) => {
 // Create new component
 router.post("/", requireRole("admin", "editor"), async (req, res) => {
   try {
-    const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
+    const { name, description, html_content, css_content, js_content, config, dataset_id } = req.body;
 
     if (!name || !html_content) {
       return res.status(400).json({ error: "Name and HTML content are required" });
     }
 
-    // Validate dataset if provided
+    // Validate dataset if provided (optional - components can be static)
     if (dataset_id) {
       const datasetExists = await datasetRepository.exists(dataset_id);
       if (!datasetExists) {
         return res.status(404).json({ error: "Dataset not found" });
-      }
-    }
-
-    // Legacy: Validate connection if provided (backward compatibility)
-    if (connection_id && !dataset_id) {
-      const connectionExists = await connectionRepository.exists(connection_id);
-      if (!connectionExists) {
-        return res.status(404).json({ error: "Connection not found" });
       }
     }
 
@@ -112,8 +96,6 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
       js_content,
       config: config ? JSON.stringify(config) : null,
       dataset_id,
-      connection_id,
-      sql_query,
       created_by: req.user.id,
     });
 
@@ -127,8 +109,6 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
         js_content,
         config,
         dataset_id,
-        connection_id,
-        sql_query,
       },
       message: "Component created successfully",
     });
@@ -141,7 +121,7 @@ router.post("/", requireRole("admin", "editor"), async (req, res) => {
 // Update component
 router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
   try {
-    const { name, description, html_content, css_content, js_content, config, dataset_id, connection_id, sql_query } = req.body;
+    const { name, description, html_content, css_content, js_content, config, dataset_id } = req.body;
     const componentId = req.params.id;
 
     const existing = await customComponentRepository.findById(componentId);
@@ -150,7 +130,7 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
     }
 
     // Validate dataset if provided
-    if (dataset_id) {
+    if (dataset_id && dataset_id !== existing.dataset_id) {
       const datasetExists = await datasetRepository.exists(dataset_id);
       if (!datasetExists) {
         return res.status(404).json({ error: "Dataset not found" });
@@ -165,8 +145,6 @@ router.put("/:id", requireRole("admin", "editor"), async (req, res) => {
       js_content: js_content !== undefined ? js_content : existing.js_content,
       config: config ? JSON.stringify(config) : existing.config,
       dataset_id: dataset_id !== undefined ? dataset_id : existing.dataset_id,
-      connection_id: connection_id !== undefined ? connection_id : existing.connection_id,
-      sql_query: sql_query !== undefined ? sql_query : existing.sql_query,
     });
 
     res.json({ message: "Component updated successfully" });
@@ -194,7 +172,7 @@ router.delete("/:id", requireRole("admin", "editor"), async (req, res) => {
   }
 });
 
-// Get component data (execute the component's query if it has one)
+// Get component data (execute the component's query via dataset)
 router.get("/:id/data", async (req, res) => {
   try {
     const component = await prisma.customComponent.findUnique({
@@ -203,7 +181,6 @@ router.get("/:id/data", async (req, res) => {
         dataset: {
           include: { connection: true },
         },
-        connection: true,
       },
     });
 
@@ -211,74 +188,58 @@ router.get("/:id/data", async (req, res) => {
       return res.status(404).json({ error: "Component not found" });
     }
 
-    let sqlQuery;
-    let connection;
+    // No data source - return component without data (static component)
+    if (!component.dataset_id || !component.dataset) {
+      return res.json({
+        component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
+        data: null,
+      });
+    }
+
+    const dataset = component.dataset;
+    const connection = dataset.connection;
+
+    if (!connection) {
+      return res.json({
+        component: {
+          ...component,
+          config: component.config ? JSON.parse(component.config) : {},
+        },
+        data: null,
+        error: "No connection found for dataset",
+      });
+    }
+
     let result;
 
-    // Check if component uses a dataset
-    if (component.dataset_id && component.dataset) {
-      const dataset = component.dataset;
-      connection = dataset.connection;
-
-      if (!connection) {
-        return res.json({
-          component: {
-            ...component,
-            config: component.config ? JSON.parse(component.config) : {},
-          },
-          data: null,
-          error: "No connection found for dataset",
-        });
+    if (dataset.source_type === 'sql') {
+      // Build query based on dataset type
+      let sqlQuery;
+      if (dataset.dataset_type === 'physical') {
+        const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
+        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+      } else if (dataset.dataset_type === 'virtual') {
+        sqlQuery = dataset.sql_query;
       }
 
-      if (dataset.source_type === 'sql') {
-        // Build query based on dataset type
-        if (dataset.dataset_type === 'physical') {
-          const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
-          sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
-        } else if (dataset.dataset_type === 'virtual') {
-          sqlQuery = dataset.sql_query;
-        }
-
-        if (!sqlQuery) {
-          return res.json({
-            component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
-            data: null,
-            error: "No query available",
-          });
-        }
-
-        result = await executeQuery(connection, sqlQuery);
-      } else if (dataset.source_type === 'api') {
-        result = await executeApiRequest(connection);
-      } else if (dataset.source_type === 'googlesheet') {
-        result = await fetchGoogleSheet(connection);
-      } else {
+      if (!sqlQuery) {
         return res.json({
           component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
           data: null,
-          error: `Unsupported source type: ${dataset.source_type}`,
-        });
-      }
-    } else if (component.connection_id && component.sql_query) {
-      // Legacy: component uses connection directly
-      sqlQuery = component.sql_query;
-      connection = component.connection;
-
-      if (!connection) {
-        return res.json({
-          component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
-          data: null,
-          error: "No connection found",
+          error: "No query available",
         });
       }
 
       result = await executeQuery(connection, sqlQuery);
+    } else if (dataset.source_type === 'api') {
+      result = await executeApiRequest(connection);
+    } else if (dataset.source_type === 'googlesheet') {
+      result = await fetchGoogleSheet(connection);
     } else {
-      // No data source, return component without data
       return res.json({
         component: { ...component, config: component.config ? JSON.parse(component.config) : {} },
         data: null,
+        error: `Unsupported source type: ${dataset.source_type}`,
       });
     }
 
@@ -287,7 +248,6 @@ router.get("/:id/data", async (req, res) => {
         ...component,
         config: component.config ? JSON.parse(component.config) : {},
         dataset: undefined,
-        connection: undefined,
       },
       data: result?.rows || [],
       fields: result?.fields,
