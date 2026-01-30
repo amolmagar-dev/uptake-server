@@ -14,8 +14,6 @@ export interface CreateCustomComponentInput {
   css_content?: string;
   js_content?: string;
   config?: string;
-  connection_id?: string;
-  sql_query?: string;
   dataset_id?: string;
   created_by?: string;
 }
@@ -27,8 +25,6 @@ export interface UpdateCustomComponentInput {
   css_content?: string;
   js_content?: string;
   config?: string;
-  connection_id?: string;
-  sql_query?: string;
   dataset_id?: string;
 }
 
@@ -59,15 +55,7 @@ class CustomComponentRepository {
     });
   }
 
-  /**
-   * Find custom components by connection
-   */
-  async findByConnection(connectionId: string): Promise<CustomComponent[]> {
-    return prisma.customComponent.findMany({
-      where: { connection_id: connectionId },
-      orderBy: { created_at: "desc" },
-    });
-  }
+
 
   /**
    * Create a new custom component
@@ -82,8 +70,6 @@ class CustomComponentRepository {
         css_content: data.css_content,
         js_content: data.js_content,
         config: data.config,
-        connection_id: data.connection_id,
-        sql_query: data.sql_query,
         dataset_id: data.dataset_id,
         // Only set created_by if it's provided (not set when created via AI)
         ...(data.created_by ? { created_by: data.created_by } : {}),
