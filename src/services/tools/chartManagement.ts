@@ -9,9 +9,12 @@ import { z } from "zod";
 import { prisma } from "../../db/client.js";
 import { chartRepository } from "../../db/repositories/index.js";
 import { executeQuery } from "../databaseConnector.js";
+import { executeApiRequest } from "../apiConnector.js";
+import { fetchGoogleSheet } from "../googleSheetsConnector.js";
 import { findChart, findDataset } from "./utils.js";
 
 const chartConfigSchema = z.object({
+  // Simple config options (mapped to ECharts)
   xAxis: z.string().optional().describe("Column name for X axis"),
   yAxis: z.string().optional().describe("Column name for Y axis"),
   groupBy: z.string().optional().describe("Column to group data by"),
@@ -21,6 +24,11 @@ const chartConfigSchema = z.object({
   title: z.string().optional().describe("Chart title override"),
   valueField: z.string().optional().describe("Value field for number/gauge charts"),
   aggregation: z.enum(["sum", "count", "avg", "min", "max"]).optional().describe("Aggregation function"),
+  
+  // Full ECharts options (RAG-powered) - use z.any() for Gemini API compatibility
+  echarts: z.any().optional().describe(`Full ECharts configuration object (JSON). Use $DATA placeholder for dynamic data.
+    Example: { "series": [{ "type": "bar", "data": "$DATA" }], "xAxis": { "type": "category" } }
+    Supports: title, legend, grid, xAxis, yAxis, tooltip, series, dataZoom, visualMap, toolbox.`),
 });
 
 const chartDataSchema = z.object({
@@ -259,7 +267,7 @@ async function executeChartManagement({ action, chartId, data }: ChartManagement
           return JSON.stringify({ success: false, error: "chartId is required for get_data action" });
         }
 
-        const chart = await prisma.chart.findUnique({
+        let chart = await prisma.chart.findUnique({
           where: { id: chartId },
           include: {
             dataset: { include: { connection: true } },
@@ -271,17 +279,33 @@ async function executeChartManagement({ action, chartId, data }: ChartManagement
           if (!chartByName) {
             return JSON.stringify({ success: false, error: "Chart not found", chartId });
           }
-          return executeChartManagement({ action: "get_data", chartId: chartByName.id, data: undefined });
+          // Re-fetch with includes
+          chart = await prisma.chart.findUnique({
+            where: { id: chartByName.id },
+            include: {
+              dataset: { include: { connection: true } },
+            }
+          });
+          if (!chart) {
+            return JSON.stringify({ success: false, error: "Chart not found", chartId });
+          }
         }
 
-        if (chart.dataset_id && chart.dataset) {
-          const dataset = chart.dataset as any;
-          const connection = dataset.connection;
-          
-          if (!connection) {
-            return JSON.stringify({ success: false, error: "Dataset connection not found" });
-          }
+        if (!chart.dataset_id || !chart.dataset) {
+          return JSON.stringify({ success: false, error: "Chart has no dataset configured" });
+        }
 
+        const dataset = chart.dataset as any;
+        const connection = dataset.connection;
+        
+        if (!connection) {
+          return JSON.stringify({ success: false, error: "Dataset connection not found" });
+        }
+
+        let result;
+
+        // Handle different source types
+        if (dataset.source_type === 'sql') {
           let sqlQuery;
           if (dataset.dataset_type === "physical") {
             const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
@@ -296,24 +320,32 @@ async function executeChartManagement({ action, chartId, data }: ChartManagement
             return JSON.stringify({ success: false, error: "No SQL query defined for dataset" });
           }
 
-          const result = await executeQuery(connection, sqlQuery);
-
-          return JSON.stringify({
-            success: true,
-            action: "get_data",
-            chartId: chart.id,
-            chartName: chart.name,
-            chartType: chart.chart_type,
-            datasetName: dataset.name,
-            data: result.rows,
-            fields: result.fields,
-            rowCount: result.rowCount,
-            executionTime: `${result.executionTime}ms`,
-            config: chart.config ? JSON.parse(chart.config) : {},
-          });
+          result = await executeQuery(connection, sqlQuery);
+        } else if (dataset.source_type === 'api') {
+          result = await executeApiRequest(connection);
+        } else if (dataset.source_type === 'googlesheet') {
+          result = await fetchGoogleSheet(connection);
+        } else {
+          return JSON.stringify({ success: false, error: `Unsupported source type: ${dataset.source_type}` });
         }
 
-        return JSON.stringify({ success: false, error: "No data source defined for this chart" });
+        const chartConfig = chart.config ? JSON.parse(chart.config) : {};
+        const interpolatedConfig = interpolateDataInConfig(chartConfig, result.rows);
+
+        return JSON.stringify({
+          success: true,
+          action: "get_data",
+          chartId: chart.id,
+          chartName: chart.name,
+          chartType: chart.chart_type,
+          datasetName: dataset.name,
+          sourceType: dataset.source_type,
+          data: result.rows,
+          fields: result.fields,
+          rowCount: result.rowCount,
+          executionTime: `${result.executionTime}ms`,
+          chartConfig: interpolatedConfig,
+        });
       }
 
       default:
@@ -329,9 +361,57 @@ async function executeChartManagement({ action, chartId, data }: ChartManagement
   }
 }
 
+/**
+ * Interpolate $DATA placeholder in chart config with actual data rows.
+ * Supports:
+ * - "$DATA" string placeholder anywhere in config
+ * - config.echarts field with $DATA placeholder
+ * - Legacy dataset.source merging
+ */
+function interpolateDataInConfig(config: any, rows: any[]): any {
+  // If config has echarts field, process it separately
+  if (config.echarts) {
+    const echartsConfig = config.echarts;
+    const echartsStr = JSON.stringify(echartsConfig);
+    
+    if (echartsStr.includes('"$DATA"')) {
+      const interpolated = echartsStr.replace(/"\\$DATA"/g, JSON.stringify(rows));
+      return { ...config, echarts: JSON.parse(interpolated) };
+    }
+    
+    // Auto-inject data if series exists but has no data
+    if (echartsConfig.series) {
+      const series = Array.isArray(echartsConfig.series) ? echartsConfig.series : [echartsConfig.series];
+      const updatedSeries = series.map((s: any) => ({
+        ...s,
+        data: s.data || rows,
+      }));
+      return { ...config, echarts: { ...echartsConfig, series: updatedSeries } };
+    }
+    
+    return config;
+  }
+  
+  // Convert to string and check for $DATA placeholder
+  const configStr = JSON.stringify(config);
+  
+  if (configStr.includes('"$DATA"')) {
+    // Replace "$DATA" with actual data array
+    const interpolated = configStr.replace(/"\\$DATA"/g, JSON.stringify(rows));
+    return JSON.parse(interpolated);
+  }
+  
+  // Legacy: merge into dataset.source if it exists
+  if (config.dataset) {
+    return { ...config, dataset: { ...config.dataset, source: rows } };
+  }
+  
+  return config;
+}
+
 const chartManagement = tool(executeChartManagement, {
   name: "chart_management",
-  description: `Manage charts for data visualization. Supported actions:
+  description: `Manage charts for data visualization using ECharts. Supported actions:
 - list: List all charts with their configurations
 - get: Get details of a specific chart
 - create: Create a new chart using a dataset
@@ -339,11 +419,40 @@ const chartManagement = tool(executeChartManagement, {
 - delete: Delete a chart
 - get_data: Execute the chart's query and return data for visualization
 
-Charts are linked to Datasets for their data source. Use dataset_management tool first to create a dataset, then use this tool to create charts from it.
+Charts are linked to Datasets for their data source. Use dataset_management tool first to create a dataset.
 
-Chart types supported: bar, line, pie, area, scatter, donut, table, number, gauge
-You can use either chart ID or chart name for get, update, delete, and get_data actions.`,
+## ECharts Configuration Reference
+
+Use the 'config.echarts' field for full ECharts customization. Use "$DATA" placeholder for dynamic data.
+
+### Key ECharts Options:
+- **title**: { text, subtext, left, top, textStyle }
+- **legend**: { show, orient, left, top, data }
+- **grid**: { left, right, top, bottom, containLabel }
+- **xAxis**: { type: "category"|"value"|"time", data, name, axisLabel }
+- **yAxis**: { type: "value"|"category", name, min, max, axisLabel }
+- **tooltip**: { trigger: "item"|"axis", formatter }
+- **series**: [{ type, name, data: "$DATA", itemStyle, label, emphasis }]
+- **color**: ["#5470c6", "#91cc75", ...] - Global color palette
+- **dataZoom**: [{ type: "inside"|"slider" }] - For large datasets
+
+### Series Types:
+line, bar, pie, scatter, radar, gauge, funnel, heatmap, treemap, sunburst, graph, sankey
+
+### Chart Type Templates:
+- **bar/line**: xAxis(category), yAxis(value), series[{type, data}]
+- **pie/donut**: series[{type:"pie", radius, data:[{name,value}]}]
+- **gauge**: series[{type:"gauge", min, max, data:[{value,name}]}]
+- **scatter**: xAxis(value), yAxis(value), series[{type, data:[[x,y],...]}]
+
+### Example Configs:
+Bar: { "echarts": { "xAxis": {"type":"category"}, "yAxis": {"type":"value"}, "series": [{"type":"bar", "data":"$DATA"}] }}
+Pie: { "echarts": { "series": [{"type":"pie", "radius":"50%", "data":"$DATA"}] }}
+
+Supported data sources: SQL databases, APIs, Google Sheets
+Chart types: bar, line, pie, area, scatter, donut, table, number, gauge`,
   schema: chartManagementSchema,
 });
 
 export default chartManagement;
+
