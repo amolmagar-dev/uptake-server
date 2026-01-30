@@ -1,37 +1,29 @@
-// @ts-nocheck
 /**
  * Project Helper Tool
  * Provides project overview, search, and help functionality
+ * Refactored to use LangChain.js
  */
 
-import { toolDefinition } from "@tanstack/ai";
+import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { prisma } from "../../db/client.js";
 
-const projectHelperDef = toolDefinition({
-  name: "project_helper",
-  description: `Get project overview, search for specific items, or get help with available capabilities.
-  
-This tool helps you understand the current state of the project:
-- Get counts of connections, charts, dashboards, and queries
-- Search for items by name or type
-- Get information about available tools and features`,
-  inputSchema: z.object({
-    action: z
-      .enum(["overview", "search", "help"])
-      .describe("The action to perform"),
-    searchTerm: z
-      .string()
-      .optional()
-      .describe("Search term for finding charts, dashboards, connections, or queries (for search action)"),
-  }),
+const projectHelperSchema = z.object({
+  action: z
+    .enum(["overview", "search", "help"])
+    .describe("The action to perform"),
+  searchTerm: z
+    .string()
+    .optional()
+    .describe("Search term for finding charts, dashboards, connections, or queries (for search action)"),
 });
 
-const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => {
+type ProjectHelperInput = z.infer<typeof projectHelperSchema>;
+
+async function executeProjectHelper({ action, searchTerm }: ProjectHelperInput): Promise<string> {
   try {
     switch (action) {
       case "overview": {
-        // Get counts of all major entities
         const [connectionsCount, chartsCount, dashboardsCount, queriesCount, datasetsCount, componentsCount] = await Promise.all([
           prisma.connection.count(),
           prisma.chart.count(),
@@ -41,7 +33,7 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
           prisma.customComponent.count(),
         ]);
 
-        return {
+        return JSON.stringify({
           success: true,
           action: "overview",
           counts: {
@@ -53,18 +45,17 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
             customComponents: componentsCount,
           },
           summary: `Project has ${connectionsCount} connection(s), ${chartsCount} chart(s), ${dashboardsCount} dashboard(s), ${queriesCount} saved quer${queriesCount === 1 ? 'y' : 'ies'}, ${datasetsCount} dataset(s), and ${componentsCount} custom component(s).`,
-        };
+        });
       }
 
       case "search": {
         if (!searchTerm) {
-          return {
+          return JSON.stringify({
             success: false,
             error: "searchTerm is required for search action",
-          };
+          });
         }
 
-        // Search across all entity types
         const [connections, charts, dashboards, queries] = await Promise.all([
           prisma.connection.findMany({
             where: {
@@ -95,10 +86,10 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
         ]);
 
         const results = {
-          connections: connections.map(c => ({ id: c.id, name: c.name, type: c.type })),
-          charts: charts.map(c => ({ id: c.id, name: c.name, type: c.chart_type })),
-          dashboards: dashboards.map(d => ({ id: d.id, name: d.name })),
-          savedQueries: queries.map(q => ({ id: q.id, name: q.name })),
+          connections: connections.map((c: any) => ({ id: c.id, name: c.name, type: c.type })),
+          charts: charts.map((c: any) => ({ id: c.id, name: c.name, type: c.chart_type })),
+          dashboards: dashboards.map((d: any) => ({ id: d.id, name: d.name })),
+          savedQueries: queries.map((q: any) => ({ id: q.id, name: q.name })),
         };
 
         const totalMatches =
@@ -107,17 +98,17 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
           results.dashboards.length +
           results.savedQueries.length;
 
-        return {
+        return JSON.stringify({
           success: true,
           action: "search",
           searchTerm,
           totalMatches,
           results,
-        };
+        });
       }
 
       case "help": {
-        return {
+        return JSON.stringify({
           success: true,
           action: "help",
           availableTools: {
@@ -139,9 +130,15 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
             queries: [
               "query_management - Save and manage SQL queries"
             ],
+            datasets: [
+              "dataset_management - Manage datasets for charts"
+            ],
+            components: [
+              "custom_component_management - Create custom React components"
+            ],
             utility: [
               "project_helper - This tool - project overview and search"
-           ]
+            ]
           },
           commonTasks: [
             "To create a chart: Use chart_management with action='create'",
@@ -150,23 +147,34 @@ const projectHelper = projectHelperDef.server(async ({ action, searchTerm }) => 
             "To create a dashboard: Use dashboard_management with action='create'",
             "To search the project: Use project_helper with action='search'",
           ],
-        };
+        });
       }
 
       default:
-        return {
+        return JSON.stringify({
           success: false,
           error: `Unknown action: ${action}`,
-        };
+        });
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Project helper error:", error);
-    return {
+    return JSON.stringify({
       success: false,
       error: error.message || "Project helper failed",
       action,
-    };
+    });
   }
+}
+
+const projectHelper = tool(executeProjectHelper, {
+  name: "project_helper",
+  description: `Get project overview, search for specific items, or get help with available capabilities.
+  
+This tool helps you understand the current state of the project:
+- Get counts of connections, charts, dashboards, and queries
+- Search for items by name or type
+- Get information about available tools and features`,
+  schema: projectHelperSchema,
 });
 
 export default projectHelper;

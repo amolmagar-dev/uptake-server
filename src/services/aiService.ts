@@ -4,23 +4,29 @@
  */
 
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
+import { HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage } from "@langchain/core/messages";
+import { getAllTools } from "./tools/index.js";
 
 const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You help users with their data exploration and visualization needs.
 
 ## Your Capabilities:
-1. **Database Operations**: Help users understand how to query their databases
+1. **Database Connections**: Create, manage, and test database connections (PostgreSQL, MySQL, SQLite)
 2. **Schema Exploration**: Guide users on exploring tables, columns, and relationships
 3. **Dataset Management**: Assist with creating and managing datasets
 4. **Chart Creation**: Help design various charts (bar, line, pie, area, scatter, table, etc.)
 5. **Dashboard Management**: Guide dashboard organization and design
 6. **Query Writing**: Help write SQL queries
 
+## Available Tools:
+You have access to the following tools:
+- **connection_management**: Manage database connections (list, get, create, update, delete, test)
+
 ## Guidelines:
 - Be helpful and concise
-- When users ask about data, guide them on how to use the platform
+- Use the available tools to help users accomplish their tasks
+- When users ask about connections, use the connection_management tool
 - Provide clear explanations and examples
-- If you can't perform an action directly, explain how the user can do it through the UI
+- Always report the results of tool calls to the user
 
 ## Chart Types Available:
 - bar: Compare categories
@@ -49,12 +55,27 @@ interface AIContext {
   customText?: string;
 }
 
+interface ToolCall {
+  name: string;
+  args: Record<string, any>;
+  id: string;
+}
+
+interface ToolResult {
+  toolCallId: string;
+  toolName: string;
+  result: any;
+}
+
 class AIService {
   private model: ChatGoogleGenerativeAI | null = null;
+  private modelWithTools: any = null;
   private modelName: string;
+  private tools: any[];
 
   constructor(model: string | null = null) {
     this.modelName = model || process.env.AI_MODEL || "gemini-1.5-flash";
+    this.tools = getAllTools();
   }
 
   /**
@@ -72,6 +93,21 @@ class AIService {
       });
     }
     return this.model;
+  }
+
+  /**
+   * Get model with tools bound
+   */
+  private getModelWithTools() {
+    if (!this.modelWithTools) {
+      const model = this.getModel();
+      if (this.tools.length > 0) {
+        this.modelWithTools = model.bindTools(this.tools);
+      } else {
+        this.modelWithTools = model;
+      }
+    }
+    return this.modelWithTools;
   }
 
   /**
@@ -144,12 +180,12 @@ class AIService {
   /**
    * Convert messages to LangChain format
    */
-  convertToLangChainMessages(messages: ChatMessage[], contexts: AIContext[] = []) {
-    const langChainMessages = [];
-    
+  convertToLangChainMessages(messages: ChatMessage[], contexts: AIContext[] = []): BaseMessage[] {
+    const langChainMessages: BaseMessage[] = [];
+
     // Check if there's already a system message
     const hasSystem = messages.some((m) => m.role === "system");
-    
+
     if (!hasSystem) {
       // Build context-aware system prompt
       const contextPrompt = this.buildContextPrompt(contexts);
@@ -174,7 +210,40 @@ class AIService {
   }
 
   /**
-   * Run chat with LangChain
+   * Execute a tool call
+   */
+  async executeToolCall(toolCall: ToolCall): Promise<ToolResult> {
+    console.log(`[AI SERVICE] Executing tool: ${toolCall.name}`);
+    
+    const tool = this.tools.find((t) => t.name === toolCall.name);
+    if (!tool) {
+      return {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result: JSON.stringify({ error: `Tool not found: ${toolCall.name}` }),
+      };
+    }
+
+    try {
+      const result = await tool.invoke(toolCall.args);
+      console.log(`[AI SERVICE] Tool ${toolCall.name} executed successfully`);
+      return {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+      };
+    } catch (error: any) {
+      console.error(`[AI SERVICE] Tool execution error:`, error);
+      return {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result: JSON.stringify({ error: error.message || "Tool execution failed" }),
+      };
+    }
+  }
+
+  /**
+   * Run chat with LangChain and tool support
    */
   async runChat(messages: ChatMessage[], contexts: AIContext[] = []) {
     console.log("[AI SERVICE] Chat called with", messages.length, "messages");
@@ -183,23 +252,60 @@ class AIService {
     }
 
     this.validateMessages(messages);
-    
+
     const langChainMessages = this.convertToLangChainMessages(messages, contexts);
-    console.log("[AI SERVICE] Messages prepared, invoking LangChain...");
+    console.log("[AI SERVICE] Messages prepared, invoking LangChain with tools...");
 
     try {
-      const response = await this.getModel().invoke(langChainMessages);
+      const modelWithTools = this.getModelWithTools();
+      let response = await modelWithTools.invoke(langChainMessages);
       
-      const text = typeof response.content === "string" 
-        ? response.content 
-        : JSON.stringify(response.content);
-      
+      // Handle tool calls in a loop
+      const allToolCalls: ToolCall[] = [];
+      const allToolResults: ToolResult[] = [];
+
+      while (response.tool_calls && response.tool_calls.length > 0) {
+        console.log(`[AI SERVICE] Model requested ${response.tool_calls.length} tool call(s)`);
+        
+        // Add assistant message with tool calls
+        langChainMessages.push(response);
+        
+        // Execute all tool calls
+        for (const toolCall of response.tool_calls) {
+          const tc: ToolCall = {
+            name: toolCall.name,
+            args: toolCall.args,
+            id: toolCall.id || `call_${Date.now()}`,
+          };
+          allToolCalls.push(tc);
+          
+          const result = await this.executeToolCall(tc);
+          allToolResults.push(result);
+          
+          // Add tool result message
+          langChainMessages.push(new ToolMessage({
+            tool_call_id: tc.id,
+            content: typeof result.result === "string" ? result.result : JSON.stringify(result.result),
+          }));
+        }
+        
+        // Get next response from model
+        response = await modelWithTools.invoke(langChainMessages);
+      }
+
+      const text =
+        typeof response.content === "string"
+          ? response.content
+          : JSON.stringify(response.content);
+
       console.log("[AI SERVICE] Response received. Text length:", text.length);
-      
+      console.log("[AI SERVICE] Total tool calls:", allToolCalls.length);
+
       return {
         text: text || "No response.",
         model: this.modelName,
-        toolCalls: null, // Tools disabled for now
+        toolCalls: allToolCalls.length > 0 ? allToolCalls : null,
+        toolResults: allToolResults.length > 0 ? allToolResults : null,
         widgets: null,
       };
     } catch (error) {
@@ -209,10 +315,13 @@ class AIService {
   }
 
   /**
-   * Get available tools metadata (empty for now)
+   * Get available tools metadata
    */
   getAvailableTools() {
-    return []; // Tools will be implemented later
+    return this.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+    }));
   }
 
   /**
@@ -220,7 +329,17 @@ class AIService {
    */
   setModel(model: string) {
     this.modelName = model;
-    this.model = null; // Reset so it gets recreated with new model name
+    this.model = null;
+    this.modelWithTools = null;
+    return this;
+  }
+
+  /**
+   * Refresh tools (useful if tools are dynamically updated)
+   */
+  refreshTools() {
+    this.tools = getAllTools();
+    this.modelWithTools = null;
     return this;
   }
 }

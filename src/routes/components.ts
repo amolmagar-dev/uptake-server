@@ -213,11 +213,13 @@ router.get("/:id/data", async (req, res) => {
     if (dataset.source_type === 'sql') {
       // Build query based on dataset type
       let sqlQuery;
+      const MAX_ROWS = 10000; // Limit to prevent memory issues
       if (dataset.dataset_type === 'physical') {
         const schemaPrefix = dataset.table_schema ? `"${dataset.table_schema}".` : '';
-        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}"`;
+        sqlQuery = `SELECT * FROM ${schemaPrefix}"${dataset.table_name}" LIMIT ${MAX_ROWS}`;
       } else if (dataset.dataset_type === 'virtual') {
-        sqlQuery = dataset.sql_query;
+        // Wrap virtual query in a subquery with LIMIT
+        sqlQuery = `SELECT * FROM (${dataset.sql_query}) AS subq LIMIT ${MAX_ROWS}`;
       }
 
       if (!sqlQuery) {
@@ -241,7 +243,7 @@ router.get("/:id/data", async (req, res) => {
       });
     }
 
-    res.json({
+    const responseData = {
       component: {
         ...component,
         config: component.config ? JSON.parse(component.config) : {},
@@ -251,7 +253,18 @@ router.get("/:id/data", async (req, res) => {
       fields: result?.fields,
       rowCount: result?.rowCount,
       executionTime: result?.executionTime,
+    };
+
+    // Debug: log sizes
+    console.log("Component data response sizes:", {
+      htmlContentLength: component.html_content?.length || 0,
+      cssContentLength: component.css_content?.length || 0,
+      jsContentLength: component.js_content?.length || 0,
+      rowCount: result?.rowCount || 0,
+      dataKeys: result?.rows?.length > 0 ? Object.keys(result.rows[0]) : [],
     });
+
+    res.json(responseData);
   } catch (error) {
     console.error("Get component data error:", error);
     res.status(400).json({ error: error.message });

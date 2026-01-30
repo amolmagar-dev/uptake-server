@@ -1,30 +1,27 @@
-// @ts-nocheck
 /**
  * List Connections Tool
  * Lists all available database connections
+ * Refactored to use LangChain.js
  */
 
-import { toolDefinition } from "@tanstack/ai";
+import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { prisma } from "../../db/client.js";
 
-const listConnectionsDef = toolDefinition({
-  name: "list_connections",
-  description: "List all available database connections with their details (name, type, host, etc.)",
-  inputSchema: z.object({
-    filter: z
-      .enum(["all", "mysql", "postgresql", "sqlite"])
-      .optional()
-      .describe("Filter connections by database type (optional)"),
-  }),
+const listConnectionsSchema = z.object({
+  filter: z
+    .enum(["all", "mysql", "postgresql", "sqlite"])
+    .optional()
+    .describe("Filter connections by database type (optional)"),
 });
 
-const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => {
+type ListConnectionsInput = z.infer<typeof listConnectionsSchema>;
+
+async function executeListConnections({ filter = "all" }: ListConnectionsInput): Promise<string> {
   console.log("[TOOL] list_connections called with filter:", filter);
   try {
     console.log("[TOOL] Querying connections from database...");
     
-    // Build filter condition
     const whereCondition = filter !== "all" ? { type: filter } : {};
 
     const connections = await prisma.connection.findMany({
@@ -44,8 +41,7 @@ const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => 
       orderBy: { created_at: "desc" }
     });
 
-    // Format connections with user names
-    const connectionsWithUsers = connections.map((conn) => ({
+    const connectionsWithUsers = connections.map((conn: any) => ({
       id: conn.id,
       name: conn.name,
       type: conn.type,
@@ -70,14 +66,20 @@ const listConnections = listConnectionsDef.server(async ({ filter = "all" }) => 
       },
     };
     console.log("[TOOL] list_connections returning:", JSON.stringify(result, null, 2));
-    return result;
-  } catch (error) {
+    return JSON.stringify(result);
+  } catch (error: any) {
     console.error("[TOOL] Error listing connections:", error);
-    return {
+    return JSON.stringify({
       success: false,
       error: error.message || "Failed to list connections",
-    };
+    });
   }
+}
+
+const listConnections = tool(executeListConnections, {
+  name: "list_connections",
+  description: "List all available database connections with their details (name, type, host, etc.)",
+  schema: listConnectionsSchema,
 });
 
 export default listConnections;

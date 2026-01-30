@@ -12,10 +12,7 @@ export interface CreateChartInput {
   description?: string;
   chart_type: string;
   config: string;
-  query_id?: string;
-  sql_query?: string;
-  connection_id?: string;
-  dataset_id?: string;
+  dataset_id: string; // Required - charts must link to a dataset
   created_by?: string;
 }
 
@@ -24,9 +21,6 @@ export interface UpdateChartInput {
   description?: string;
   chart_type?: string;
   config?: string;
-  query_id?: string;
-  sql_query?: string;
-  connection_id?: string;
   dataset_id?: string;
 }
 
@@ -58,11 +52,15 @@ class ChartRepository {
   }
 
   /**
-   * Find charts by connection
+   * Find charts by connection (via dataset relationship)
    */
   async findByConnection(connectionId: string): Promise<Chart[]> {
     return prisma.chart.findMany({
-      where: { connection_id: connectionId },
+      where: {
+        dataset: {
+          connection_id: connectionId,
+        },
+      },
       orderBy: { created_at: "desc" },
     });
   }
@@ -85,9 +83,6 @@ class ChartRepository {
         description: data.description,
         chart_type: data.chart_type,
         config: data.config,
-        query_id: data.query_id,
-        sql_query: data.sql_query,
-        connection_id: data.connection_id,
         dataset_id: data.dataset_id,
         created_by: data.created_by,
       },

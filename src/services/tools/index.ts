@@ -1,51 +1,84 @@
 /**
- * Tool Registry for AI Adapter
- * Centralized place to manage all available tools
- * 
- * NOTE: Tools are temporarily disabled during LangChain.js migration
- * They will be re-implemented step by step
+ * AI Tools Registry
+ * Central registry for all AI tools using LangChain.js
  */
 
-// Database & Schema Tools (disabled)
-// import listTables from "./listTables.js";
-// import listConnections from "./listConnections.js";
-// import databaseOperations from "./databaseOperations.js";
-// import schemaExplorer from "./schemaExplorer.js";
+import { StructuredToolInterface } from "@langchain/core/tools";
 
-// Management Tools (disabled)
-// import connectionManagement from "./connectionManagement.js";
-// import datasetManagement from "./datasetManagement.js";
-// import chartManagement from "./chartManagement.js";
-// import dashboardManagement from "./dashboardManagement.js";
-// import queryManagement from "./queryManagement.js";
-// import customComponentManagement from "./customComponentManagement.js";
+// Import all LangChain tools
+import connectionManagement from "./connectionManagement.js";
+import chartManagement from "./chartManagement.js";
+import customComponentManagement from "./customComponentManagement.js";
+import dashboardManagement from "./dashboardManagement.js";
+import datasetManagement from "./datasetManagement.js";
+import queryManagement from "./queryManagement.js";
+import databaseOperations from "./databaseOperations.js";
+import listTables from "./listTables.js";
+import listConnections from "./listConnections.js";
+import schemaExplorer from "./schemaExplorer.js";
+import projectHelper from "./projectHelper.js";
 
-// Utility Tools (disabled)
-// import projectHelper from "./projectHelper.js";
-
-/**
- * Get all available tools for the AI chatbot
- * Currently returns empty array - tools will be added incrementally
- */
-export const getAllTools = () => [];
-
-/**
- * Get tool by name
- */
-export const getToolByName = (name: string) => {
-  const tools = getAllTools();
-  return tools.find((tool: any) => tool.name === name);
+// Export all tools
+export {
+  connectionManagement,
+  chartManagement,
+  customComponentManagement,
+  dashboardManagement,
+  datasetManagement,
+  queryManagement,
+  databaseOperations,
+  listTables,
+  listConnections,
+  schemaExplorer,
+  projectHelper,
 };
 
 /**
- * Get tools grouped by category
+ * Get all available tools as an array for binding to LangChain model
  */
-export const getToolsByCategory = () => ({
-  database: [],
-  connections: [],
-  datasets: [],
-  visualization: [],
-  dashboards: [],
-  queries: [],
-  utility: [],
-});
+export function getAllTools(): StructuredToolInterface[] {
+  return [
+    connectionManagement,
+    chartManagement,
+    customComponentManagement,
+    dashboardManagement,
+    datasetManagement,
+    queryManagement,
+    databaseOperations,
+    listTables,
+    listConnections,
+    schemaExplorer,
+    projectHelper,
+  ];
+}
+
+/**
+ * Get tools by category
+ */
+export function getToolsByCategory(): Record<string, StructuredToolInterface[]> {
+  return {
+    connections: [connectionManagement, listConnections],
+    database: [databaseOperations, listTables, schemaExplorer],
+    charts: [chartManagement],
+    dashboards: [dashboardManagement],
+    queries: [queryManagement],
+    datasets: [datasetManagement],
+    components: [customComponentManagement],
+    utility: [projectHelper],
+  };
+}
+
+/**
+ * Get a tool by name
+ */
+export function getToolByName(name: string): StructuredToolInterface | undefined {
+  const allTools = getAllTools();
+  return allTools.find(tool => tool.name === name);
+}
+
+/**
+ * Get tool names for display
+ */
+export function getToolNames(): string[] {
+  return getAllTools().map(tool => tool.name);
+}
