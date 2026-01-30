@@ -15,13 +15,11 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.17",
+    "@langchain/google-genai": "^2.1.13",
     "@prisma/adapter-better-sqlite3": "^7.2.0",
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^7.2.0",
-    "@tanstack/ai": "^0.2.0",
-    "@tanstack/ai-anthropic": "^0.2.0",
-    "@tanstack/ai-gemini": "^0.2.0",
-    "@tanstack/ai-ollama": "^0.2.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.2.2",
     "cors": "^2.8.5",
@@ -30,6 +28,7 @@
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "langchain": "^1.2.15",
     "mysql2": "^3.6.5",
     "nunjucks": "^3.2.4",
     "pg": "^8.11.3",

@@ -1,53 +1,26 @@
-// @ts-nocheck
 /**
  * AI Service
- * Core AI functionality and chat management
+ * Core AI functionality and chat management using LangChain.js
  */
 
-import { chat } from "@tanstack/ai";
-import { geminiText } from "@tanstack/ai-gemini";
-import { getAllTools } from "./tools/index.js";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
 
-const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You have full access to the project's capabilities through tools.
+const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You help users with their data exploration and visualization needs.
 
 ## Your Capabilities:
-1. **Database Operations**: Execute SQL queries on connected databases
-2. **Schema Exploration**: Explore tables, columns, and relationships in databases
-3. **Dataset Management**: Create and manage datasets (data sources for charts)
-4. **Chart Creation**: Create various charts (bar, line, pie, area, scatter, table, etc.)
-5. **Dashboard Management**: Create and organize dashboards with multiple charts
-6. **Connection Management**: Add, test, and manage database connections
-7. **Query Management**: Save and reuse SQL queries
-8. **Custom Component Management**: Create custom HTML/CSS/JS components for specialized visualizations
+1. **Database Operations**: Help users understand how to query their databases
+2. **Schema Exploration**: Guide users on exploring tables, columns, and relationships
+3. **Dataset Management**: Assist with creating and managing datasets
+4. **Chart Creation**: Help design various charts (bar, line, pie, area, scatter, table, etc.)
+5. **Dashboard Management**: Guide dashboard organization and design
+6. **Query Writing**: Help write SQL queries
 
-## ⚠️ CRITICAL RULES - VIOLATING THESE IS FORBIDDEN:
-1. **NEVER return data in text format** - You are FORBIDDEN from displaying data as text, JSON, or markdown tables
-2. **ALWAYS use database_operations tool** when asked to show/display/preview/fetch any data
-3. **NEVER use dataset_management to retrieve data** - Use database_operations with a SELECT query instead
-4. **DO NOT describe data** - Execute the query with database_operations to show actual data in an interactive widget
-5. If you receive dataset context, you MUST still use database_operations to query the actual table data
-
-## When User Asks for Data (Examples):
-- "Show me records" → Use database_operations with SELECT query
-- "Display data from table X" → Use database_operations with SELECT query
-- "What's in this dataset?" → Use database_operations with SELECT query
-- "Preview the data" → Use database_operations with SELECT query
-- "Get first N rows" → Use database_operations with SELECT ... LIMIT N
-
-## Other Guidelines:
-- When asked to create a chart, first create a dataset, then create the chart using that dataset
-- For custom components, create HTML/CSS/JS and optionally link to a dataset for dynamic data
-- Always use the appropriate tool - don't just describe what should be done, DO IT
-- For data questions, first list available connections if none is specified
-- When creating charts, ask for clarification on chart type and axes if not specified
-- Provide helpful summaries of tool results in natural language
-- If a tool call fails, explain the error and suggest solutions
-- For complex requests, break them down into steps and execute each
-
-## IMPORTANT - Tool Call Rules:
-- **Make ONE tool call at a time.** Wait for the result before making the next call.
-- Do NOT try to batch multiple tool calls together.
-- When adding multiple charts to a dashboard, add them one at a time.
+## Guidelines:
+- Be helpful and concise
+- When users ask about data, guide them on how to use the platform
+- Provide clear explanations and examples
+- If you can't perform an action directly, explain how the user can do it through the UI
 
 ## Chart Types Available:
 - bar: Compare categories
@@ -61,20 +34,50 @@ const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data 
 
 ## Dataset Types:
 - Physical: References a database table directly
-- Virtual: Uses a custom SQL query (for filtering columns, joining tables, etc.)
+- Virtual: Uses a custom SQL query (for filtering columns, joining tables, etc.)`;
 
-Remember: ALWAYS use database_operations to show data. The user will see an interactive widget with the results. NEVER return data as text!`;
+interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+interface AIContext {
+  type: string;
+  name: string;
+  id?: number;
+  metadata?: Record<string, any>;
+  customText?: string;
+}
 
 class AIService {
-  constructor(model = null) {
-    this.model = model || process.env.AI_MODEL;
-    this.tools = getAllTools();
+  private model: ChatGoogleGenerativeAI | null = null;
+  private modelName: string;
+
+  constructor(model: string | null = null) {
+    this.modelName = model || process.env.AI_MODEL || "gemini-1.5-flash";
+  }
+
+  /**
+   * Get or create the model instance (lazy initialization)
+   */
+  private getModel(): ChatGoogleGenerativeAI {
+    if (!this.model) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY environment variable is required");
+      }
+      this.model = new ChatGoogleGenerativeAI({
+        model: this.modelName,
+        apiKey,
+      });
+    }
+    return this.model;
   }
 
   /**
    * Validate messages format
    */
-  validateMessages(messages) {
+  validateMessages(messages: ChatMessage[]): boolean {
     if (!Array.isArray(messages)) {
       throw new Error("Messages must be an array");
     }
@@ -87,146 +90,137 @@ class AIService {
   /**
    * Build context prompt from user-provided contexts
    */
-  buildContextPrompt(contexts) {
-    if (!contexts || contexts.length === 0) return '';
+  buildContextPrompt(contexts: AIContext[]): string {
+    if (!contexts || contexts.length === 0) return "";
 
-    let contextPrompt = '\n\n## USER PROVIDED CONTEXT:\nThe user has selected the following items to provide context for this conversation. Use this information to better understand what they want to work with:\n';
+    let contextPrompt =
+      "\n\n## USER PROVIDED CONTEXT:\nThe user has selected the following items to provide context for this conversation. Use this information to better understand what they want to work with:\n";
 
     for (const ctx of contexts) {
       contextPrompt += `\n### ${ctx.type.toUpperCase()}: ${ctx.name}`;
-      
-      if (ctx.type === 'connection' && ctx.metadata) {
+
+      if (ctx.type === "connection" && ctx.metadata) {
         if (ctx.metadata.connectionType) {
           contextPrompt += ` (${ctx.metadata.connectionType} database)`;
         }
         if (ctx.metadata.tables && ctx.metadata.tables.length > 0) {
-          contextPrompt += `\n   Selected tables: ${ctx.metadata.tables.join(', ')}`;
+          contextPrompt += `\n   Selected tables: ${ctx.metadata.tables.join(", ")}`;
         }
       }
-      
-      if (ctx.type === 'dataset' && ctx.metadata) {
+
+      if (ctx.type === "dataset" && ctx.metadata) {
         if (ctx.metadata.datasetType) {
           contextPrompt += ` (${ctx.metadata.datasetType} dataset)`;
         }
         if (ctx.metadata.columns && ctx.metadata.columns.length > 0) {
-          contextPrompt += `\n   Available columns: ${ctx.metadata.columns.slice(0, 10).join(', ')}${ctx.metadata.columns.length > 10 ? '...' : ''}`;
+          contextPrompt += `\n   Available columns: ${ctx.metadata.columns.slice(0, 10).join(", ")}${ctx.metadata.columns.length > 10 ? "..." : ""}`;
         }
       }
-      
-      if (ctx.type === 'chart' && ctx.metadata?.chartType) {
+
+      if (ctx.type === "chart" && ctx.metadata?.chartType) {
         contextPrompt += ` (${ctx.metadata.chartType} chart)`;
       }
 
-      if (ctx.type === 'component' && ctx.metadata) {
+      if (ctx.type === "component" && ctx.metadata) {
         contextPrompt += ` (custom HTML/CSS/JS component)`;
         if (ctx.metadata.datasetType) {
           contextPrompt += `\n   Data source: ${ctx.metadata.datasetType}`;
         }
       }
-      
+
       if (ctx.customText) {
         contextPrompt += `\n   User notes: ${ctx.customText}`;
       }
-      
-      contextPrompt += '\n';
+
+      contextPrompt += "\n";
     }
 
-    contextPrompt += '\nWhen responding, prioritize working with the above context items. If the user asks about data, queries, or visualizations, assume they want to use the selected contexts unless they specify otherwise.';
+    contextPrompt +=
+      "\nWhen responding, prioritize working with the above context items. If the user asks about data, queries, or visualizations, assume they want to use the selected contexts unless they specify otherwise.";
 
     return contextPrompt;
   }
 
   /**
-   * Add system prompt to messages if not present
+   * Convert messages to LangChain format
    */
-  prepareMessages(messages, contexts = []) {
+  convertToLangChainMessages(messages: ChatMessage[], contexts: AIContext[] = []) {
+    const langChainMessages = [];
+    
     // Check if there's already a system message
     const hasSystem = messages.some((m) => m.role === "system");
-    if (hasSystem) {
-      return messages;
+    
+    if (!hasSystem) {
+      // Build context-aware system prompt
+      const contextPrompt = this.buildContextPrompt(contexts);
+      langChainMessages.push(new SystemMessage(SYSTEM_PROMPT + contextPrompt));
     }
-    // Build context-aware system prompt
-    const contextPrompt = this.buildContextPrompt(contexts);
-    // Prepend system message with context
-    return [{ role: "system", content: SYSTEM_PROMPT + contextPrompt }, ...messages];
+
+    for (const msg of messages) {
+      switch (msg.role) {
+        case "system":
+          langChainMessages.push(new SystemMessage(msg.content));
+          break;
+        case "user":
+          langChainMessages.push(new HumanMessage(msg.content));
+          break;
+        case "assistant":
+          langChainMessages.push(new AIMessage(msg.content));
+          break;
+      }
+    }
+
+    return langChainMessages;
   }
 
   /**
-   * Run chat with accumulated text from stream
+   * Run chat with LangChain
    */
-  async runChat(messages, contexts = []) {
+  async runChat(messages: ChatMessage[], contexts: AIContext[] = []) {
     console.log("[AI SERVICE] Chat called with", messages.length, "messages");
     if (contexts && contexts.length > 0) {
       console.log("[AI SERVICE] Context items:", contexts.length);
     }
-    console.log("[AI SERVICE] Available tools:", this.tools.length, "tools");
+
     this.validateMessages(messages);
-    const preparedMessages = this.prepareMessages(messages, contexts);
-    console.log("[AI SERVICE] Messages prepared, starting chat stream...");
-    const stream = chat({
-      adapter: geminiText(this.model),
-      messages: preparedMessages,
-      tools: this.tools.length > 0 ? this.tools : undefined,
-    });
+    
+    const langChainMessages = this.convertToLangChainMessages(messages, contexts);
+    console.log("[AI SERVICE] Messages prepared, invoking LangChain...");
 
-    // Accumulate text from stream chunks
-    let text = "";
-    let toolCalls = [];
-    let widgets = []; // NEW: Collect widgets from tool results
-
-    for await (const chunk of stream) {
-      console.log("[AI SERVICE] Chunk received:", JSON.stringify(chunk));
-      if (chunk.type === "content" && chunk.content) {
-        console.log("[AI SERVICE] Content chunk received, length:", chunk.content.length);
-        text = chunk.content; // content is cumulative, not delta
-      }
-      if (chunk.type === "tool-call") {
-        console.log("[AI SERVICE] Tool call detected:", chunk.toolName || chunk.name);
-        toolCalls.push(chunk);
-      }
-      // NEW: Extract widget from tool_result chunks
-      if (chunk.type === "tool_result" && chunk.content) {
-        try {
-          // Tool result content is JSON string, parse it
-          const toolResult = typeof chunk.content === 'string' 
-            ? JSON.parse(chunk.content) 
-            : chunk.content;
-          
-          // Check if widget exists in the parsed result
-          if (toolResult?.widget) {
-            console.log("[AI SERVICE] Widget data found in tool result for:", chunk.toolCallId);
-            widgets.push(toolResult.widget);
-          }
-        } catch (error) {
-          console.error("[AI SERVICE] Error parsing tool result:", error);
-        }
-      }
+    try {
+      const response = await this.getModel().invoke(langChainMessages);
+      
+      const text = typeof response.content === "string" 
+        ? response.content 
+        : JSON.stringify(response.content);
+      
+      console.log("[AI SERVICE] Response received. Text length:", text.length);
+      
+      return {
+        text: text || "No response.",
+        model: this.modelName,
+        toolCalls: null, // Tools disabled for now
+        widgets: null,
+      };
+    } catch (error) {
+      console.error("[AI SERVICE] Error invoking LangChain:", error);
+      throw error;
     }
-
-    console.log("[AI SERVICE] Stream complete. Text length:", text.length, "Tool calls:", toolCalls.length, "Widgets:", widgets.length);
-    return {
-      text: text || "No response.",
-      model: this.model,
-      toolCalls: toolCalls.length > 0 ? toolCalls : null,
-      widgets: widgets.length > 0 ? widgets : null, // NEW: Return widgets if any
-    };
   }
 
   /**
-   * Get available tools metadata
+   * Get available tools metadata (empty for now)
    */
   getAvailableTools() {
-    return this.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-    }));
+    return []; // Tools will be implemented later
   }
 
   /**
    * Set custom model
    */
-  setModel(model) {
-    this.model = model;
+  setModel(model: string) {
+    this.modelName = model;
+    this.model = null; // Reset so it gets recreated with new model name
     return this;
   }
 }
