@@ -6,10 +6,10 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { prisma } from "../../db/client.js";
-import { connectionRepository } from "../../db/repositories/index.js";
-import { testConnection, closeConnection } from "../databaseConnector.js";
-import { findConnection, getAvailableConnectionsList } from "./utils.js";
+import { prisma } from "../../../db/client.js";
+import { connectionRepository } from "../../../db/repositories/index.js";
+import { testConnection, closeConnection } from "../../databaseConnector.js";
+import { findConnection, getAvailableConnectionsList } from "../shared/utils.js";
 
 /**
  * Connection data schema for create and update operations

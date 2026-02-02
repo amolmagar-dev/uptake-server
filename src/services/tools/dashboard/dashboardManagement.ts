@@ -6,10 +6,10 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { prisma } from "../../db/client.js";
-import { dashboardRepository } from "../../db/repositories/index.js";
-import { executeQuery } from "../databaseConnector.js";
-import { findDashboard, findChart } from "./utils.js";
+import { prisma } from "../../../db/client.js";
+import { dashboardRepository } from "../../../db/repositories/index.js";
+import { executeQuery } from "../../databaseConnector.js";
+import { findDashboard, findChart } from "../shared/utils.js";
 
 const dashboardDataSchema = z.object({
   name: z.string().optional().describe("Dashboard name"),

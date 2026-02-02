@@ -6,8 +6,8 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { prisma } from "../../db/client.js";
-import { customComponentRepository } from "../../db/repositories/index.js";
+import { prisma } from "../../../db/client.js";
+import { customComponentRepository } from "../../../db/repositories/index.js";
 
 const componentDataSchema = z.object({
   name: z.string().optional().describe("Component name"),

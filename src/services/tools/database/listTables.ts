@@ -6,7 +6,7 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { findConnection, getAvailableConnectionsList } from "./utils.js";
+import { findConnection, getAvailableConnectionsList } from "../shared/utils.js";
 
 const listTablesSchema = z.object({
   connectionId: z.string().describe("The database connection ID or name to list tables from"),

@@ -6,10 +6,10 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { prisma } from "../../db/client.js";
-import { datasetRepository } from "../../db/repositories/index.js";
-import { executeQuery } from "../databaseConnector.js";
-import { findConnection, findDataset, getAvailableConnectionsList } from "./utils.js";
+import { prisma } from "../../../db/client.js";
+import { datasetRepository } from "../../../db/repositories/index.js";
+import { executeQuery } from "../../databaseConnector.js";
+import { findConnection, findDataset, getAvailableConnectionsList } from "../shared/utils.js";
 
 const datasetDataSchema = z.object({
   name: z.string().optional().describe("Dataset name"),

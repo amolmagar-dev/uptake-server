@@ -6,12 +6,12 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { prisma } from "../../db/client.js";
-import { chartRepository } from "../../db/repositories/index.js";
-import { executeQuery } from "../databaseConnector.js";
-import { executeApiRequest } from "../apiConnector.js";
-import { fetchGoogleSheet } from "../googleSheetsConnector.js";
-import { findChart, findDataset } from "./utils.js";
+import { prisma } from "../../../db/client.js";
+import { chartRepository } from "../../../db/repositories/index.js";
+import { executeQuery } from "../../databaseConnector.js";
+import { executeApiRequest } from "../../apiConnector.js";
+import { fetchGoogleSheet } from "../../googleSheetsConnector.js";
+import { findChart, findDataset } from "../shared/utils.js";
 
 const chartConfigSchema = z.object({
   // Simple config options (mapped to ECharts)

@@ -6,8 +6,8 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { executeQuery } from "../databaseConnector.js";
-import { findConnection, getAvailableConnectionsList } from "./utils.js";
+import { executeQuery } from "../../databaseConnector.js";
+import { findConnection, getAvailableConnectionsList } from "../shared/utils.js";
 
 const databaseOperationsSchema = z.object({
   connectionId: z.string().describe("The database connection ID or name to execute query on"),

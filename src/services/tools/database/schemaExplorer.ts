@@ -6,8 +6,8 @@
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { executeQuery } from "../databaseConnector.js";
-import { findConnection, getAvailableConnectionsList } from "./utils.js";
+import { executeQuery } from "../../databaseConnector.js";
+import { findConnection, getAvailableConnectionsList } from "../shared/utils.js";
 
 const schemaExplorerSchema = z.object({
   action: z

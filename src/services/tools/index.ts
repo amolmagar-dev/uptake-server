@@ -6,17 +6,23 @@
 import { StructuredToolInterface } from "@langchain/core/tools";
 
 // Import all LangChain tools
-import connectionManagement from "./connectionManagement.js";
-import chartManagement from "./chartManagement.js";
-import customComponentManagement from "./customComponentManagement.js";
-import dashboardManagement from "./dashboardManagement.js";
-import datasetManagement from "./datasetManagement.js";
-import queryManagement from "./queryManagement.js";
-import databaseOperations from "./databaseOperations.js";
-import listTables from "./listTables.js";
-import listConnections from "./listConnections.js";
-import schemaExplorer from "./schemaExplorer.js";
-import projectHelper from "./projectHelper.js";
+import connectionManagement from "./connections/connectionManagement.js";
+import listConnections from "./connections/listConnections.js";
+
+import chartManagement from "./charts/chartManagement.js";
+
+import databaseOperations from "./database/databaseOperations.js";
+import listTables from "./database/listTables.js";
+import schemaExplorer from "./database/schemaExplorer.js";
+import queryManagement from "./database/queryManagement.js";
+
+import dashboardManagement from "./dashboard/dashboardManagement.js";
+
+import datasetManagement from "./dataset/datasetManagement.js";
+
+import customComponentManagement from "./components/customComponentManagement.js";
+
+import projectHelper from "./shared/projectHelper.js";
 
 // Export all tools
 export {

@@ -3,7 +3,7 @@
  * Shared utilities for AI tools
  */
 
-import { prisma } from "../../db/client.js";
+import { prisma } from "../../../db/client.js";
 
 /**
  * Find a connection by ID or name
