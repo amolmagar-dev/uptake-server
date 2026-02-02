@@ -420,16 +420,26 @@ async function executeSchemaExplorer({ action, connectionId, tableName, schema =
 
 const schemaExplorer = tool(executeSchemaExplorer, {
   name: "schema_explorer",
-  description: `Explore database schema and structure. Supported actions:
-- list_tables: List all tables in a database connection
-- get_columns: Get column details for a specific table
-- get_sample_data: Get sample rows from a table
-- get_table_stats: Get row count and basic statistics for a table
-- search_tables: Search for tables by name pattern
-- get_relationships: Get foreign key relationships for a table (PostgreSQL/MySQL)
+  description: `Explore database schema and structure (metadata only, not for running queries).
 
-Use this to understand database structure before writing queries or creating charts.
-You can use either connection ID or connection name.`,
+WHEN TO USE:
+- "What tables exist?" / "List tables" → use action=list_tables
+- "What columns does X have?" / "Describe table X" → use action=get_columns
+- "Show me sample data from X" → use action=get_sample_data
+- "How many rows in X?" → use action=get_table_stats
+- "Find tables matching X" → use action=search_tables
+- "What are the relationships?" → use action=get_relationships
+
+DO NOT USE for running SQL queries - use database_operations instead.
+This tool is for UNDERSTANDING the database structure before writing queries.
+
+ACTIONS:
+- list_tables: All tables in connection (requires connectionId)
+- get_columns: Column details for table (requires connectionId + tableName)
+- get_sample_data: Preview 10 rows (requires connectionId + tableName)
+- get_table_stats: Row count, stats (requires connectionId + tableName)
+- search_tables: Find tables by pattern (requires connectionId + pattern)
+- get_relationships: Foreign keys (requires connectionId + tableName, PostgreSQL/MySQL only)`,
   schema: schemaExplorerSchema,
 });
 

@@ -411,46 +411,29 @@ function interpolateDataInConfig(config: any, rows: any[]): any {
 
 const chartManagement = tool(executeChartManagement, {
   name: "chart_management",
-  description: `Manage charts for data visualization using ECharts. Supported actions:
-- list: List all charts with their configurations
-- get: Get details of a specific chart
-- create: Create a new chart using a dataset
-- update: Update an existing chart
-- delete: Delete a chart
-- get_data: Execute the chart's query and return data for visualization
+  description: `Create and manage charts for data visualization using ECharts.
 
-Charts are linked to Datasets for their data source. Use dataset_management tool first to create a dataset.
+WHEN TO USE:
+- User says "create chart", "make a chart", "visualize data"
+- User wants to list, view, update, or delete charts
+- User wants to get chart data for display
 
-## ECharts Configuration Reference
+IMPORTANT: Charts require a Dataset. If no dataset exists, use dataset_management first.
 
-Use the 'config.echarts' field for full ECharts customization. Use "$DATA" placeholder for dynamic data.
+ACTIONS:
+- list: List all charts
+- get: Get chart details (requires chartId)
+- create: Create a chart (requires data.name, data.chart_type, data.dataset_id)
+- update: Modify chart (requires chartId + data)
+- delete: Remove chart (requires chartId)
+- get_data: Fetch data for rendering (requires chartId)
 
-### Key ECharts Options:
-- **title**: { text, subtext, left, top, textStyle }
-- **legend**: { show, orient, left, top, data }
-- **grid**: { left, right, top, bottom, containLabel }
-- **xAxis**: { type: "category"|"value"|"time", data, name, axisLabel }
-- **yAxis**: { type: "value"|"category", name, min, max, axisLabel }
-- **tooltip**: { trigger: "item"|"axis", formatter }
-- **series**: [{ type, name, data: "$DATA", itemStyle, label, emphasis }]
-- **color**: ["#5470c6", "#91cc75", ...] - Global color palette
-- **dataZoom**: [{ type: "inside"|"slider" }] - For large datasets
+CHART TYPES:
+- bar: Compare categories | line: Trends over time | pie/donut: Proportions
+- area: Cumulative | scatter: Correlations | gauge: Progress | table: Raw data
 
-### Series Types:
-line, bar, pie, scatter, radar, gauge, funnel, heatmap, treemap, sunburst, graph, sankey
-
-### Chart Type Templates:
-- **bar/line**: xAxis(category), yAxis(value), series[{type, data}]
-- **pie/donut**: series[{type:"pie", radius, data:[{name,value}]}]
-- **gauge**: series[{type:"gauge", min, max, data:[{value,name}]}]
-- **scatter**: xAxis(value), yAxis(value), series[{type, data:[[x,y],...]}]
-
-### Example Configs:
-Bar: { "echarts": { "xAxis": {"type":"category"}, "yAxis": {"type":"value"}, "series": [{"type":"bar", "data":"$DATA"}] }}
-Pie: { "echarts": { "series": [{"type":"pie", "radius":"50%", "data":"$DATA"}] }}
-
-Supported data sources: SQL databases, APIs, Google Sheets
-Chart types: bar, line, pie, area, scatter, donut, table, number, gauge`,
+CONFIG: Use "echarts" field for ECharts options. Use "$DATA" as placeholder for dynamic data.
+Example: { "echarts": { "series": [{ "type": "bar", "data": "$DATA" }] } }`,
   schema: chartManagementSchema,
 });
 

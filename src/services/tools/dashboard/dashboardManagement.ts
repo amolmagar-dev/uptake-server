@@ -449,19 +449,29 @@ async function executeDashboardManagement({ action, dashboardId, chartId, dashbo
 
 const dashboardManagement = tool(executeDashboardManagement, {
   name: "dashboard_management",
-  description: `Manage dashboards and their charts. Supported actions:
-- list: List all dashboards with chart counts
-- get: Get dashboard details with all its charts
-- create: Create a new dashboard
-- update: Update dashboard name, description, layout, or visibility
-- delete: Delete a dashboard
-- add_chart: Add an existing chart to a dashboard
-- remove_chart: Remove a chart from a dashboard
-- update_chart_position: Update chart position/size in dashboard
-- get_data: Get all chart data for a dashboard
+  description: `Manage dashboards - containers for organizing multiple charts.
 
-Use this when user wants to create, modify dashboards or organize charts on dashboards.
-You can use either dashboard ID or dashboard name, and chart ID or chart name.`,
+WHEN TO USE:
+- "Create dashboard", "make a dashboard" → action=create
+- "List dashboards", "show dashboards" → action=list
+- "Add chart to dashboard" → action=add_chart
+- "Show dashboard data" → action=get_data
+
+IMPORTANT: Dashboards contain Charts. Create charts with chart_management first.
+
+ACTIONS:
+- list: List all dashboards
+- get: Get dashboard with charts (requires dashboardId)
+- create: New dashboard (requires data.name)
+- update: Modify dashboard (requires dashboardId + data)
+- delete: Remove dashboard (requires dashboardId)
+- add_chart: Add chart to dashboard (requires dashboardId + chartId + position)
+- remove_chart: Remove chart (requires dashboardId + chartId)
+- update_chart_position: Move/resize chart (requires dashboardId + chartId + position)
+- get_data: Fetch all chart data for display (requires dashboardId)
+
+POSITION FORMAT: { x: 0-11, y: row, w: width, h: height }
+Grid is 12 columns. Default: { x: 0, y: 0, w: 6, h: 4 }`,
   schema: dashboardManagementSchema,
 });
 

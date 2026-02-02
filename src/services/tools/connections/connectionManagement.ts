@@ -335,15 +335,27 @@ async function executeConnectionManagement({
  */
 const connectionManagement = tool(executeConnectionManagement, {
   name: "connection_management",
-  description: `Manage database connections. Supported actions:
-- list: List all connections (optionally filter by type)
-- get: Get details of a specific connection
-- create: Create a new database connection (supports postgresql, mysql, sqlite)
-- update: Update an existing connection
-- delete: Delete a connection
-- test: Test if a connection is working
-Use this tool whenever user wants to view, add, modify, or remove database connections.
-You can use either connection ID or connection name for get, update, delete, and test actions.`,
+  description: `Full CRUD operations for database connections.
+
+WHEN TO USE:
+- User wants to CREATE a new database connection
+- User wants to UPDATE connection settings (host, port, credentials)
+- User wants to DELETE a connection
+- User wants to TEST if a connection works
+- User wants detailed info about a SPECIFIC connection (use action=get)
+
+DO NOT USE for just listing connections - use list_connections instead.
+
+ACTIONS:
+- list: List all connections (filter by type with filter param)
+- get: Get one connection's details (requires connectionId)
+- create: New connection (requires data with name, type, host, port, database_name, username, password)
+- update: Modify connection (requires connectionId + data)
+- delete: Remove connection (requires connectionId)
+- test: Verify connection works (requires connectionId)
+
+REQUIRED for create: name, type (postgresql/mysql/sqlite), host, database_name
+REQUIRED for get/update/delete/test: connectionId (can be ID or name)`,
   schema: connectionManagementSchema,
 });
 

@@ -373,20 +373,30 @@ async function executeDatasetManagement({ action, datasetId, data, limit = 10 }:
 
 const datasetManagement = tool(executeDatasetManagement, {
   name: "dataset_management",
-  description: `Manage datasets - data source abstractions for charts. Supported actions:
-- list: List all datasets with their configurations
-- get: Get details of a specific dataset (metadata only)
-- create: Create a new dataset (physical table or virtual SQL query)
-- update: Update an existing dataset
-- delete: Delete a dataset
-- preview: Preview data from a dataset
-- get_columns: Get column information for a dataset
+  description: `Manage datasets - data source abstractions that link database connections to charts.
 
-Datasets are the data layer between connections and charts:
-- Physical datasets: Reference a table directly
-- Virtual datasets: Use a custom SQL query
+WHEN TO USE:
+- "Create dataset", "set up data source" → action=create
+- "List datasets" → action=list
+- "What columns in dataset X?" → action=get_columns
+- "Preview dataset data" → DO NOT USE, use database_operations instead to show data
 
-You can use either dataset ID or dataset name for get, update, delete, preview, and get_columns actions.`,
+IMPORTANT: Datasets bridge Connections and Charts. Create a connection first.
+
+DATASET TYPES:
+- Physical: Reference a table directly (set table_name)
+- Virtual: Use custom SQL (set sql_query) - for joins, filters, aggregations
+
+ACTIONS:
+- list: List all datasets
+- get: Get dataset details (requires datasetId)
+- create: New dataset (requires data.name, data.connection_id, + table_name OR sql_query)
+- update: Modify dataset (requires datasetId + data)
+- delete: Remove dataset (requires datasetId)
+- preview: Preview 10 rows (requires datasetId) - for debugging only
+- get_columns: Get column metadata (requires datasetId)
+
+For DISPLAYING data to users, use database_operations tool instead!`,
   schema: datasetManagementSchema,
 });
 
