@@ -1,14 +1,13 @@
+// Langfuse OpenTelemetry instrumentation (MUST be first - loads dotenv internally)
+import "./instrumentation.js";
+
 import express, { Request, Response, ErrorRequestHandler } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import fs from "fs";
-
-// Load environment variables
-dotenv.config();
 
 // Import routes
 import authRoutes from "./routes/auth.js";
@@ -52,7 +51,7 @@ app.use(
 app.use(
   pinoHttp({
     logger,
-    customLogLevel: (req, res, err) => {
+    customLogLevel: (_req, res, err) => {
       if (res.statusCode >= 500 || err) {
         return "error";
       }

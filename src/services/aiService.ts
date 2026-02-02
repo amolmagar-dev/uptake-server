@@ -6,6 +6,7 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage } from "@langchain/core/messages";
 import { getAllTools } from "./tools/index.js";
+import { createLangfuseHandler } from "../config/langfuseConfig.js";
 
 const SYSTEM_PROMPT = `You are an intelligent data assistant for Uptake, a data visualization and dashboard platform. You help users with their data exploration and visualization needs.
 
@@ -55,13 +56,13 @@ interface AIContext {
   customText?: string;
 }
 
-interface ToolCall {
+export interface ToolCall {
   name: string;
   args: Record<string, any>;
   id: string;
 }
 
-interface ToolResult {
+export interface ToolResult {
   toolCallId: string;
   toolName: string;
   result: any;
@@ -245,7 +246,15 @@ class AIService {
   /**
    * Run chat with LangChain and tool support
    */
-  async runChat(messages: ChatMessage[], contexts: AIContext[] = []) {
+  async runChat(
+    messages: ChatMessage[], 
+    contexts: AIContext[] = [],
+    options?: {
+      sessionId?: string;
+      userId?: string;
+      tags?: string[];
+    }
+  ) {
     console.log("[AI SERVICE] Chat called with", messages.length, "messages");
     if (contexts && contexts.length > 0) {
       console.log("[AI SERVICE] Context items:", contexts.length);
@@ -256,9 +265,21 @@ class AIService {
     const langChainMessages = this.convertToLangChainMessages(messages, contexts);
     console.log("[AI SERVICE] Messages prepared, invoking LangChain with tools...");
 
+    // Create Langfuse handler for tracing (if enabled)
+    const langfuseHandler = createLangfuseHandler({
+      sessionId: options?.sessionId,
+      userId: options?.userId,
+      tags: options?.tags || ["uptake-chat"],
+    });
+
+    // Build callback config
+    const callbackConfig = langfuseHandler 
+      ? { callbacks: [langfuseHandler] } 
+      : {};
+
     try {
       const modelWithTools = this.getModelWithTools();
-      let response = await modelWithTools.invoke(langChainMessages);
+      let response = await modelWithTools.invoke(langChainMessages, callbackConfig);
       
       // Handle tool calls in a loop
       const allToolCalls: ToolCall[] = [];
@@ -290,7 +311,7 @@ class AIService {
         }
         
         // Get next response from model
-        response = await modelWithTools.invoke(langChainMessages);
+        response = await modelWithTools.invoke(langChainMessages, callbackConfig);
       }
 
       const text =
@@ -300,6 +321,11 @@ class AIService {
 
       console.log("[AI SERVICE] Response received. Text length:", text.length);
       console.log("[AI SERVICE] Total tool calls:", allToolCalls.length);
+
+      // Log Langfuse trace ID for debugging (if available)
+      if (langfuseHandler && langfuseHandler.last_trace_id) {
+        console.log("[AI SERVICE] Langfuse trace ID:", langfuseHandler.last_trace_id);
+      }
 
       return {
         text: text || "No response.",
