@@ -47,7 +47,7 @@ function buildWidgetForTool(toolName: string, payload: any): BaseWidget | null {
       return {
         type: "connection_status",
         id: uuidv4(),
-        data: { success: payload.success, message: payload.message },
+        data: { success: payload.testResult?.success, message: payload.testResult?.message },
       };
     }
     case "database_operations": {

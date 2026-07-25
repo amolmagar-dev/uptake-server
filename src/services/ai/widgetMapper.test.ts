@@ -46,3 +46,23 @@ test("mapToolResultsToWidgets: unrecognized tool names produce no widget", () =>
   const messages = [new ToolMessage({ tool_call_id: "1", name: "project_helper", content: JSON.stringify({ success: true }) })];
   assert.deepEqual(mapToolResultsToWidgets(messages), []);
 });
+
+test("mapToolResultsToWidgets: maps a failed connection test to a connection_status widget with success=false", () => {
+  const messages = [
+    new ToolMessage({
+      tool_call_id: "1",
+      name: "connection_management",
+      content: JSON.stringify({
+        success: true,
+        action: "test",
+        connectionId: "c1",
+        testResult: { success: false, message: "auth failed" },
+      }),
+    }),
+  ];
+  const widgets = mapToolResultsToWidgets(messages);
+  assert.equal(widgets.length, 1);
+  assert.equal(widgets[0]!.type, "connection_status");
+  assert.equal(widgets[0]!.data.success, false);
+  assert.equal(widgets[0]!.data.message, "auth failed");
+});

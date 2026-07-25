@@ -144,7 +144,7 @@ export function createConnectionManagementTool(user: UserProfile) {
                 : connection.type === "googlesheets"
                 ? await testGoogleSheetsConnection(connection)
                 : await testConnection(connection);
-            return ok({ action, connectionId: connection.id, ...result });
+            return ok({ action, connectionId: connection.id, testResult: result });
           }
           default:
             return fail(`Unknown action: ${action}`);
