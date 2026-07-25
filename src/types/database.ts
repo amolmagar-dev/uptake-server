@@ -16,7 +16,7 @@ export interface User {
 export interface Connection {
   id: string;
   name: string;
-  type: 'mysql' | 'postgresql' | 'sqlite' | 'api' | 'googlesheets';
+  type: 'mysql' | 'postgresql' | 'sqlite' | 'api' | 'googlesheet';
   host: string | null;
   port: number | null;
   database_name: string | null;
@@ -44,7 +44,7 @@ export interface Dataset {
   id: string;
   name: string;
   description: string | null;
-  source_type: 'sql' | 'api' | 'googlesheets';
+  source_type: 'sql' | 'api' | 'googlesheet';
   dataset_type: 'physical' | 'virtual';
   connection_id: string | null;
   table_name: string | null;
