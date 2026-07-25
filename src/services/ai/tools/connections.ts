@@ -164,7 +164,7 @@ export function createConnectionManagementTool(user: UserProfile) {
   );
 }
 
-export function createListConnectionsTool(user: UserProfile) {
+export function createListConnectionsTool(_user: UserProfile) {
   return tool(
     async () => {
       const connections = await connectionRepository.findAll();

@@ -1,17 +1,20 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import type { Connection } from "@prisma/client";
 import { connectionRepository } from "../../../db/repositories/index.js";
 import { getTableList, getTableSchema, executeQuery } from "../../databaseConnector.js";
 import { assertReadOnlyQuery, toolOk as ok, toolFail as fail } from "./shared.js";
 import type { UserProfile } from "../../../types/database.js";
 
-async function requireSqlConnection(connectionId: string) {
+async function requireSqlConnection(
+  connectionId: string
+): Promise<{ error: string } | { connection: Connection }> {
   const connection = await connectionRepository.findById(connectionId);
-  if (!connection) return { error: `Connection not found: ${connectionId}` } as const;
+  if (!connection) return { error: `Connection not found: ${connectionId}` };
   if (!["postgresql", "mysql", "sqlite"].includes(connection.type)) {
-    return { error: `This tool only applies to SQL connections; "${connection.id}" is type "${connection.type}"` } as const;
+    return { error: `This tool only applies to SQL connections; "${connection.id}" is type "${connection.type}"` };
   }
-  return { connection } as const;
+  return { connection };
 }
 
 export function createListTablesTool(_user: UserProfile) {

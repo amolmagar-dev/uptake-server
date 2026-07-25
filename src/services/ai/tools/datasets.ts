@@ -75,7 +75,10 @@ export function createDatasetManagementTool(user: UserProfile) {
             let columns: { column_name: string; data_type: string }[] = [];
             if (data.config.dataset_type === "physical") {
               const schemaColumns = await getTableSchema(connection, data.config.table_name, data.config.table_schema);
-              columns = schemaColumns.map((c) => ({ column_name: c.column_name, data_type: c.data_type }));
+              columns = schemaColumns.map((c: { column_name: string; data_type: string }) => ({
+                column_name: c.column_name,
+                data_type: c.data_type,
+              }));
             }
 
             const dataset = await datasetRepository.create({
