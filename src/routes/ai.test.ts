@@ -20,12 +20,12 @@ test("POST /api/ai/chat rejects a missing messages array", async (t) => {
   // `messages` validation, which is what this test targets.
   const originalVerify = jwt.verify;
   const originalFindProfileById = userRepository.findProfileById;
-  jwt.verify = (() => ({ userId: "u1" })) as unknown as typeof jwt.verify;
-  userRepository.findProfileById = async () => ({ id: "u1", role: "admin" }) as any;
   t.after(() => {
     jwt.verify = originalVerify;
     userRepository.findProfileById = originalFindProfileById;
   });
+  jwt.verify = (() => ({ userId: "u1" })) as unknown as typeof jwt.verify;
+  userRepository.findProfileById = async () => ({ id: "u1", role: "admin" }) as any;
 
   const app = makeApp();
   const server = app.listen(0);
