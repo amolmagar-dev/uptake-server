@@ -2,7 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { connectionRepository } from "../../../db/repositories/index.js";
 import type { UpdateConnectionInput } from "../../../db/repositories/ConnectionRepository.js";
-import { requireRole, toolOk as ok, toolFail as fail } from "./shared.js";
+import { requireRole, toolOk as ok, toolFail as fail, orJsonString, parseConfigInput } from "./shared.js";
 import { testConnection, closeConnection } from "../../databaseConnector.js";
 import { testApiConnection } from "../../apiConnector.js";
 import { testGoogleSheetsConnection } from "../../googleSheetsConnector.js";
@@ -65,7 +65,11 @@ const connectionManagementSchema = z.object({
   data: z
     .object({
       name: z.string().optional(),
-      config: connectionConfigSchema.optional(),
+      config: orJsonString(connectionConfigSchema)
+        .optional()
+        .describe(
+          "A JSON-encoded string is also accepted if your tool-calling client stringifies nested objects."
+        ),
     })
     .optional(),
 });
@@ -161,9 +165,12 @@ export function createConnectionManagementTool(user: UserProfile) {
             const roleCheck = requireRole(user, ["admin", "editor"]);
             if (!roleCheck.ok) return fail(roleCheck.error);
             if (!data?.name || !data.config) return fail("name and config are required to create a connection");
-            const missing = missingRequiredConfigField(data.config);
+            const configResult = parseConfigInput(connectionConfigSchema, data.config);
+            if (!configResult.ok) return fail(configResult.error);
+            const config = configResult.value!;
+            const missing = missingRequiredConfigField(config);
             if (missing) return fail(missing);
-            const fields = toStoredConnectionFields(data.config);
+            const fields = toStoredConnectionFields(config);
             const connection = await connectionRepository.create({ name: data.name, ...fields, created_by: user.id } as any);
             return ok({ action, connection: { id: connection.id, name: connection.name, type: connection.type } });
           }
@@ -173,11 +180,14 @@ export function createConnectionManagementTool(user: UserProfile) {
             if (!connectionId) return fail("connectionId is required for update");
             const existing = await connectionRepository.findById(connectionId);
             if (!existing) return fail(`Connection not found: ${connectionId}`);
-            if (data?.config) {
-              const missing = missingRequiredConfigField(data.config);
+            const configResult = parseConfigInput(connectionConfigSchema, data?.config);
+            if (!configResult.ok) return fail(configResult.error);
+            const config = configResult.value;
+            if (config) {
+              const missing = missingRequiredConfigField(config);
               if (missing) return fail(missing);
             }
-            const fields = data?.config ? toStoredConnectionFields(data.config) : {};
+            const fields = config ? toStoredConnectionFields(config) : {};
             // Drop any cached pool built from the old credentials before writing the new
             // ones, so the next query reconnects — routes/connections.ts does the same.
             // Called unconditionally (a no-op when no pool is cached) so it also covers a

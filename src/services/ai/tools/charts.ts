@@ -4,10 +4,11 @@ import { chartRepository, datasetRepository, connectionRepository } from "../../
 import { chartConfigSchema } from "./chartSchema.js";
 import { parseAdvancedOptions, buildEChartsOption } from "./chartDataBuilder.js";
 import { toAppChartConfig, resolveChartConfigForPreview } from "./chartConfigTranslator.js";
-import { requireRole, toolOk as ok, toolFail as fail } from "./shared.js";
+import { requireRole, toolOk as ok, toolFail as fail, orJsonString, parseConfigInput } from "./shared.js";
 import { executeQuery } from "../../databaseConnector.js";
 import { executeApiRequest } from "../../apiConnector.js";
 import { fetchGoogleSheet } from "../../googleSheetsConnector.js";
+import { logger } from "../../../utils/logger.js";
 import type { UserProfile } from "../../../types/database.js";
 
 /** Matches the app-wide preview cap used by the REST dataset/query preview routes. */
@@ -21,7 +22,11 @@ const chartManagementSchema = z.object({
       name: z.string().optional().describe("Chart name"),
       description: z.string().optional().describe("Chart description"),
       dataset_id: z.string().optional().describe("Dataset ID this chart reads from"),
-      config: chartConfigSchema.optional().describe("Chart configuration, discriminated by chart_type"),
+      config: orJsonString(chartConfigSchema)
+        .optional()
+        .describe(
+          "Chart configuration, discriminated by chart_type. A JSON-encoded string is also accepted if your tool-calling client stringifies nested objects."
+        ),
     })
     .optional()
     .describe("Chart data, required for create and update"),
@@ -63,24 +68,41 @@ export function createChartManagementTool(user: UserProfile) {
           }
 
           case "create": {
+            logger.info(
+              {
+                name: data?.name,
+                datasetId: data?.dataset_id,
+                chartType: data?.config && typeof data.config === "object" ? data.config.chart_type : undefined,
+                configIsString: typeof data?.config === "string",
+              },
+              "[chart_management.create] invoked"
+            );
             const roleCheck = requireRole(user, ["admin", "editor"]);
             if (!roleCheck.ok) return fail(roleCheck.error);
             if (!data?.name || !data.dataset_id || !data.config) {
               return fail("name, dataset_id, and config are required to create a chart");
             }
 
-            const advanced = parseAdvancedOptions(data.config.advanced_options);
+            const configResult = parseConfigInput(chartConfigSchema, data.config);
+            if (!configResult.ok) return fail(configResult.error);
+            const config = configResult.value!;
+
+            const advanced = parseAdvancedOptions(config.advanced_options);
             if (!advanced.ok) return fail(advanced.error);
 
             const dataset = await datasetRepository.findById(data.dataset_id);
             if (!dataset) return fail(`Dataset not found: ${data.dataset_id}`);
+            logger.info(
+              { datasetId: dataset.id, sourceType: dataset.source_type, connectionId: dataset.connection_id },
+              "[chart_management.create] resolved dataset, persisting chart"
+            );
 
             // Persist in the app's own chart config format so the chart is editable in the
             // standalone Chart Editor, not just previewable in chat.
             // Known limitation: the app's declarative ChartConfig has no aggregation concept,
             // so a chart using group_by/aggregation opens in the Chart Editor showing raw,
             // ungrouped row-level data (the chat preview stays correct — get_data recomputes it).
-            const { chartType, appConfig } = toAppChartConfig(data.config, advanced.value);
+            const { chartType, appConfig } = toAppChartConfig(config, advanced.value);
 
             const chart = await chartRepository.create({
               name: data.name,
@@ -98,7 +120,9 @@ export function createChartManagementTool(user: UserProfile) {
             if (!roleCheck.ok) return fail(roleCheck.error);
             if (!chartId || !data) return fail("chartId and data are required for update");
 
-            const config = data.config;
+            const configResult = parseConfigInput(chartConfigSchema, data.config);
+            if (!configResult.ok) return fail(configResult.error);
+            const config = configResult.value;
             // Same app-format translation as create — see the create case for the
             // group_by/aggregation limitation this carries.
             let translated: { chartType: string; appConfig: Record<string, any> } | undefined;
