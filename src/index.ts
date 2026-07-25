@@ -14,6 +14,7 @@ import chartRoutes from "./routes/charts.js";
 import dashboardRoutes from "./routes/dashboards.js";
 import componentRoutes from "./routes/components.js";
 import datasetRoutes from "./routes/datasets.js";
+import aiRoutes from "./routes/ai.js";
 
 import { logger } from "./utils/logger.js";
 import { pinoHttp } from "pino-http";
@@ -114,6 +115,7 @@ app.use("/api/charts", chartRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/components", componentRoutes);
 app.use("/api/datasets", datasetRoutes);
+app.use("/api/ai", aiRoutes);
 
 // 404 handler
 app.use((_req: Request, res: Response) => {
