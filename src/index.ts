@@ -56,6 +56,21 @@ app.use(
       }
       return "info";
     },
+    customSuccessMessage: (req, res, responseTime) => {
+      return `[${req.method}] ${req.url} ➔ ${res.statusCode} (${responseTime}ms)`;
+    },
+    customErrorMessage: (req, res, error) => {
+      return `[${req.method}] ${req.url} ➔ ${res.statusCode} - ${error.message}`;
+    },
+    serializers: {
+      req: (req) => ({
+        method: req.method,
+        url: req.url,
+      }),
+      res: (res) => ({
+        statusCode: res.statusCode,
+      }),
+    },
   })
 );
 
