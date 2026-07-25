@@ -1,6 +1,3 @@
-// Langfuse OpenTelemetry instrumentation (MUST be first - loads dotenv internally)
-import "./instrumentation.js";
-
 import express, { Request, Response, ErrorRequestHandler } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -15,7 +12,6 @@ import connectionRoutes from "./routes/connections.js";
 import queryRoutes from "./routes/queries.js";
 import chartRoutes from "./routes/charts.js";
 import dashboardRoutes from "./routes/dashboards.js";
-import aiRoutes from "./routes/ai.js";
 import componentRoutes from "./routes/components.js";
 import datasetRoutes from "./routes/datasets.js";
 
@@ -116,7 +112,6 @@ app.use("/api/connections", connectionRoutes);
 app.use("/api/queries", queryRoutes);
 app.use("/api/charts", chartRoutes);
 app.use("/api/dashboards", dashboardRoutes);
-app.use("/api/ai", aiRoutes);
 app.use("/api/components", componentRoutes);
 app.use("/api/datasets", datasetRoutes);
 
