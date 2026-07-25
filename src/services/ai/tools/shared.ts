@@ -13,18 +13,28 @@ export function requireRole(
   return { ok: true };
 }
 
-const WRITE_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE|REPLACE)\b/i;
+/**
+ * Keywords that make a statement write (or exfiltrate) data, even inside something that
+ * starts with SELECT:
+ *  - INTO           -> `SELECT * INTO new_table FROM users` (SQL Server / Postgres SELECT INTO)
+ *  - OUTFILE/DUMPFILE -> `SELECT * FROM users INTO OUTFILE '/tmp/x'` (MySQL file writes)
+ *  - COPY           -> Postgres `COPY ... TO/FROM` file and program I/O
+ */
+const WRITE_KEYWORDS =
+  /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|MERGE|REPLACE|INTO|OUTFILE|DUMPFILE|COPY)\b/i;
 
 export function assertReadOnlyQuery(sql: string): { ok: true } | { ok: false; error: string } {
   const trimmed = sql.trim().replace(/;\s*$/, "");
   if (trimmed.includes(";")) {
     return { ok: false, error: "Only a single SQL statement is allowed." };
   }
-  if (!/^select\b/i.test(trimmed)) {
+  // A leading WITH is a read-only CTE as long as the body contains no write keywords
+  // (the blocklist below still rejects e.g. `WITH t AS (...) INSERT INTO ...`).
+  if (!/^(select|with)\b/i.test(trimmed)) {
     return {
       ok: false,
       error:
-        "database_operations only supports read-only SELECT queries. Use dataset_management or chart_management to create or update resources.",
+        "database_operations only supports read-only SELECT queries (a leading WITH ... SELECT CTE is also allowed). Use dataset_management or chart_management to create or update resources.",
     };
   }
   if (WRITE_KEYWORDS.test(trimmed)) {

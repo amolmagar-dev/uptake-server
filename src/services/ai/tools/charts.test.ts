@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createChartManagementTool } from "./charts.js";
 import { getOpenRouterModel } from "../../../config/openrouter.js";
+import { chartRepository, datasetRepository, connectionRepository } from "../../../db/repositories/index.js";
 
 const adminUser = { id: "u1", role: "admin" } as any;
 const viewerUser = { id: "u2", role: "viewer" } as any;
@@ -38,6 +39,65 @@ test("chart_management: get_data requires chartId", async () => {
   const tool = createChartManagementTool(adminUser);
   const result = JSON.parse(await tool.invoke({ action: "get_data" }));
   assert.equal(result.success, false);
+});
+
+test("chart_management: get_data resolves a chart whose stored config has no chart_type key (app-authored chart)", async () => {
+  // Regression test: get_data used to run chartConfigSchema.parse() straight over the
+  // stored config, which fails for every chart created by the app's own Chart Editor
+  // (its config uses xColumn/yColumns and has no chart_type key). The tool must now
+  // reconstruct the config and get as far as fetching data.
+  //
+  // The seeded dataset uses a deliberately unsupported source_type so the run stops at
+  // the data-fetch step with a deterministic, offline error — which only happens if
+  // config resolution succeeded first.
+  const connection = await connectionRepository.create({
+    name: "ai-tool-test-temp-connection",
+    type: "postgresql",
+    host: "127.0.0.1",
+    database_name: "unused",
+  });
+  const dataset = await datasetRepository.create({
+    name: "ai-tool-test-temp-dataset",
+    source_type: "unsupported-for-test",
+    dataset_type: "physical",
+    connection_id: connection.id,
+    table_name: "unused",
+  });
+  const chart = await chartRepository.create({
+    name: "ai-tool-test-temp-chart",
+    chart_type: "area",
+    // Verbatim app-authored config shape: camelCase columns, no chart_type key.
+    config: JSON.stringify({
+      title: { show: true, text: "" },
+      xAxis: { show: true },
+      yAxis: { show: true },
+      legend: { show: true, orient: "horizontal", top: "bottom" },
+      xColumn: "Brand",
+      yColumns: ["Rating"],
+      colorScheme: ["#2a2a3a", "#606070"],
+    }),
+    dataset_id: dataset.id,
+  });
+
+  try {
+    const tool = createChartManagementTool(adminUser);
+    // Must resolve (not reject) — the tool always returns a JSON envelope.
+    const raw = await tool.invoke({ action: "get_data", chartId: chart.id });
+    const result = JSON.parse(raw);
+
+    assert.equal(result.success, false);
+    assert.match(
+      result.error,
+      /unsupported source type/i,
+      `expected to fail at the data-fetch step, not at config validation (got: ${result.error})`
+    );
+    // Guard against regressing to a Zod union/validation failure on the stored config.
+    assert.doesNotMatch(result.error, /chart_type|invalid_union|discriminator/i);
+  } finally {
+    await chartRepository.delete(chart.id);
+    await datasetRepository.delete(dataset.id);
+    await connectionRepository.delete(connection.id);
+  }
 });
 
 test(

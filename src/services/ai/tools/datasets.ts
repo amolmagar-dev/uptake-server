@@ -84,7 +84,10 @@ export function createDatasetManagementTool(user: UserProfile) {
             const dataset = await datasetRepository.create({
               name: data.name,
               description: data.description,
-              source_type: connection.type === "api" ? "api" : connection.type === "googlesheets" ? "googlesheet" : "sql",
+              // Connection.type and Dataset.source_type both use the singular
+              // "googlesheet" everywhere else in the app (routes/connections.ts,
+              // routes/datasets.ts, the frontend, and the existing rows in the DB).
+              source_type: connection.type === "api" ? "api" : connection.type === "googlesheet" ? "googlesheet" : "sql",
               dataset_type: data.config.dataset_type,
               connection_id: connection.id,
               table_name: data.config.dataset_type === "physical" ? data.config.table_name : undefined,

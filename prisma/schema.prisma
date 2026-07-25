@@ -34,7 +34,7 @@ model User {
 model Connection {
   id            String   @id @default(uuid())
   name          String
-  type          String // mysql, postgresql, sqlite, api, googlesheets
+  type          String // mysql, postgresql, sqlite, api, googlesheet
   host          String?
   port          Int?
   database_name String?
@@ -77,7 +77,7 @@ model Dataset {
   id            String   @id @default(uuid())
   name          String
   description   String?
-  source_type   String   @default("sql") // sql, api, googlesheets
+  source_type   String   @default("sql") // sql, api, googlesheet
   dataset_type  String   @default("physical") // physical, virtual
   connection_id String?
   table_name    String?

@@ -3,11 +3,15 @@ import { z } from "zod";
 import { chartRepository, datasetRepository, connectionRepository } from "../../../db/repositories/index.js";
 import { chartConfigSchema } from "./chartSchema.js";
 import { parseAdvancedOptions, buildEChartsOption } from "./chartDataBuilder.js";
+import { toAppChartConfig, resolveChartConfigForPreview } from "./chartConfigTranslator.js";
 import { requireRole, toolOk as ok, toolFail as fail } from "./shared.js";
 import { executeQuery } from "../../databaseConnector.js";
 import { executeApiRequest } from "../../apiConnector.js";
 import { fetchGoogleSheet } from "../../googleSheetsConnector.js";
 import type { UserProfile } from "../../../types/database.js";
+
+/** Matches the app-wide preview cap used by the REST dataset/query preview routes. */
+const MAX_PREVIEW_ROWS = 100;
 
 const chartManagementSchema = z.object({
   action: z.enum(["list", "get", "create", "update", "delete", "get_data"]).describe("The action to perform"),
@@ -71,11 +75,18 @@ export function createChartManagementTool(user: UserProfile) {
             const dataset = await datasetRepository.findById(data.dataset_id);
             if (!dataset) return fail(`Dataset not found: ${data.dataset_id}`);
 
+            // Persist in the app's own chart config format so the chart is editable in the
+            // standalone Chart Editor, not just previewable in chat.
+            // Known limitation: the app's declarative ChartConfig has no aggregation concept,
+            // so a chart using group_by/aggregation opens in the Chart Editor showing raw,
+            // ungrouped row-level data (the chat preview stays correct — get_data recomputes it).
+            const { chartType, appConfig } = toAppChartConfig(data.config, advanced.value);
+
             const chart = await chartRepository.create({
               name: data.name,
               description: data.description,
-              chart_type: data.config.chart_type,
-              config: JSON.stringify(data.config),
+              chart_type: chartType,
+              config: JSON.stringify(appConfig),
               dataset_id: dataset.id,
               created_by: user.id,
             });
@@ -88,9 +99,13 @@ export function createChartManagementTool(user: UserProfile) {
             if (!chartId || !data) return fail("chartId and data are required for update");
 
             const config = data.config;
+            // Same app-format translation as create — see the create case for the
+            // group_by/aggregation limitation this carries.
+            let translated: { chartType: string; appConfig: Record<string, any> } | undefined;
             if (config) {
               const advanced = parseAdvancedOptions(config.advanced_options);
               if (!advanced.ok) return fail(advanced.error);
+              translated = toAppChartConfig(config, advanced.value);
             }
 
             const existing = await chartRepository.findById(chartId);
@@ -99,8 +114,8 @@ export function createChartManagementTool(user: UserProfile) {
             const updated = await chartRepository.update(existing.id, {
               name: data.name,
               description: data.description,
-              chart_type: config?.chart_type,
-              config: config ? JSON.stringify(config) : undefined,
+              chart_type: translated?.chartType,
+              config: translated ? JSON.stringify(translated.appConfig) : undefined,
               dataset_id: data.dataset_id,
             });
             return ok({ action, chart: { id: updated.id, name: updated.name, chartType: updated.chart_type } });
@@ -123,22 +138,36 @@ export function createChartManagementTool(user: UserProfile) {
             const dataset = await datasetRepository.findById(chart.dataset_id);
             if (!dataset) return fail("Chart's dataset not found");
 
-            const config = chartConfigSchema.parse(JSON.parse(chart.config));
-            const advanced = parseAdvancedOptions(config.advanced_options);
-            if (!advanced.ok) return fail(advanced.error);
+            // Charts may have been authored by the app's own Chart Editor, whose config
+            // format the AI schema can't always express. Fall back to a best-effort
+            // reconstruction, and degrade to raw rows (no preview) rather than failing.
+            const config = resolveChartConfigForPreview(chart.chart_type, chart.config);
+
+            let advancedOverrides: Record<string, any> = {};
+            if (config) {
+              const advanced = parseAdvancedOptions(config.advanced_options);
+              if (!advanced.ok) return fail(advanced.error);
+              advancedOverrides = advanced.value;
+            }
 
             const { rows, fields } = await fetchRowsForDataset(dataset);
-            const echartsOption = buildEChartsOption(config, rows, advanced.value);
+            // Build the preview from the full result set, then cap the rows the model sees.
+            const echartsOption = config ? buildEChartsOption(config, rows, advancedOverrides) : undefined;
+
             return ok({
               action,
               chartId: chart.id,
               chartName: chart.name,
               chartType: chart.chart_type,
               datasetName: dataset.name,
-              rows,
+              rows: rows.slice(0, MAX_PREVIEW_ROWS),
               fields,
               rowCount: rows.length,
-              echartsOption,
+              ...(echartsOption
+                ? { echartsOption }
+                : {
+                    note: `This chart's stored configuration could not be mapped to a renderable preview (chart_type "${chart.chart_type}"), so only the underlying data is returned.`,
+                  }),
             });
           }
 
@@ -156,7 +185,9 @@ export function createChartManagementTool(user: UserProfile) {
         "Charts read from a dataset (create a dataset first with dataset_management). " +
         "config is discriminated by chart_type: bar/line/area need x_axis+y_axis; pie/donut need label_field+value_field; " +
         "scatter needs x_axis+y_axis (both numeric); table needs columns; number and gauge need value_field. " +
-        "Use advanced_options (a JSON string) only for ECharts options not covered by the typed fields.",
+        "Use advanced_options (a JSON string) only for ECharts options not covered by the typed fields. " +
+        "On create/update the config is translated into the app's own chart format before being saved, so the " +
+        "config returned by get/get_data will not look identical to what was submitted.",
       schema: chartManagementSchema,
     }
   );

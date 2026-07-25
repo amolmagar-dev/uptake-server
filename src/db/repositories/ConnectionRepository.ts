@@ -20,16 +20,19 @@ export interface CreateConnectionInput {
   created_by?: string;
 }
 
+// The nullable columns accept `null` so a caller can explicitly clear them (e.g. when a
+// connection changes type). Prisma treats `undefined` as "leave this column alone", so
+// `null` is the only way to actually blank a field out.
 export interface UpdateConnectionInput {
   name?: string;
   type?: string;
-  host?: string;
-  port?: number;
-  database_name?: string;
-  username?: string;
-  password?: string;
+  host?: string | null;
+  port?: number | null;
+  database_name?: string | null;
+  username?: string | null;
+  password?: string | null;
   ssl?: number;
-  config?: string;
+  config?: string | null;
 }
 
 class ConnectionRepository {
